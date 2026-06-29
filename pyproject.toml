@@ -1,0 +1,76 @@
+[project]
+name = "amref-helpdesk-rag"
+version = "1.0.0"
+description = "Production RAG chatbot for Amref International University Help Desk"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "fastapi>=0.115.0",
+    "uvicorn[standard]>=0.32.0",
+    "streamlit>=1.40.0",
+    # Database — PostgreSQL (Docker)
+    "sqlalchemy[asyncio]>=2.0.36",
+    "asyncpg>=0.30.0",
+    "alembic>=1.14.0",
+    # Vector store
+    "chromadb>=0.5.23",
+    # LangChain core
+    "langchain>=0.3.14",
+    "langchain-core>=0.3.0",
+    "langchain-community>=0.3.14",
+    "langchain-text-splitters>=0.3.4",
+    # LLM — Anthropic (primary)
+    "langchain-anthropic>=0.3.0",
+    "anthropic>=0.40.0",
+    # LLM — OpenAI (optional fallback, kept for flexibility)
+    "langchain-openai>=0.2.14",
+    "openai>=1.58.1",
+    # Embeddings — sentence-transformers (optional fallback for Ollama)
+    "sentence-transformers>=3.3.1",
+    # HTTP client (used by Ollama embedding backend)
+    "httpx>=0.28.1",
+    # Crawling / parsing
+    "beautifulsoup4>=4.12.3",
+    "lxml>=5.3.0",
+    # Pydantic / settings
+    "pydantic[email]>=2.10.3",
+    "pydantic-settings>=2.6.1",
+    # Auth / security
+    "python-jose[cryptography]>=3.3.0",
+    "passlib[bcrypt]>=1.7.4",
+    "python-multipart>=0.0.20",
+    # Rate limiting
+    "slowapi>=0.1.9",
+    # Tokenisation (used by chunker)
+    "tiktoken>=0.8.0",
+    # Image handling
+    "pillow>=11.0.0",
+    # Async file I/O
+    "aiofiles>=24.1.0",
+    # Numerics
+    "numpy>=2.2.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.3.4",
+    "pytest-asyncio>=0.24.0",
+    "httpx>=0.28.1",
+    "ruff>=0.8.4",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["backend"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+pythonpath = ["."]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"

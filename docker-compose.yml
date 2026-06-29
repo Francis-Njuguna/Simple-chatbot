@@ -1,0 +1,85 @@
+services:
+  # ---------------------------------------------------------------------------
+  # PostgreSQL — persistent relational store
+  # Run standalone: docker compose up postgres -d
+  # Tables are created automatically on first app startup via init_db().
+  # ---------------------------------------------------------------------------
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: amref
+      POSTGRES_PASSWORD: amref_secret
+      POSTGRES_DB: amref_helpdesk
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U amref -d amref_helpdesk"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  # ---------------------------------------------------------------------------
+  # FastAPI backend
+  # LLM  : Anthropic Claude (ANTHROPIC_API_KEY required in .env)
+  # Embed: Ollama nomic-embed-text (Ollama must be running on the host)
+  # ---------------------------------------------------------------------------
+  backend:
+    build:
+      context: .
+      target: backend          # ← uses the "backend" stage in the Dockerfile
+    image: amref-helpdesk-rag-backend   # ← explicit, unambiguous image name
+    ports:
+      - "8000:8000"
+    env_file:
+      - .env.example
+    environment:
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+      # LLM
+      LLM_PROVIDER: anthropic
+      ANTHROPIC_MODEL: claude-3-5-haiku-20241022
+      # Embeddings
+      EMBEDDING_PROVIDER: ollama
+      OLLAMA_EMBEDDING_MODEL: nomic-embed-text
+      # Ollama runs on the Docker host — use host-gateway
+      OLLAMA_BASE_URL: http://host.docker.internal:11434
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - ./data:/app/data
+      - ./logs:/app/logs
+      - ./backend/app/static/images:/app/backend/app/static/images
+    depends_on:
+      postgres:
+        condition: service_healthy
+    # No --reload in production; use workers=1 for single-container simplicity
+    command: uvicorn backend.app.main:app --host 0.0.0.0 --port 8000 --workers 1
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # ---------------------------------------------------------------------------
+  # Streamlit frontend
+  # ---------------------------------------------------------------------------
+  frontend:
+    build:
+      context: .
+      target: frontend         # ← uses the "frontend" stage in the Dockerfile
+    image: amref-helpdesk-rag-frontend  # ← explicit, unambiguous image name
+    ports:
+      - "8501:8501"
+    env_file:
+      - .env.example
+    environment:
+      API_BASE_URL: http://backend:8000/api/v1
+      BACKEND_URL: http://backend:8000
+    depends_on:
+      - backend
+    command: streamlit run frontend/streamlit_app.py --server.port 8501 --server.address 0.0.0.0
+
+volumes:
+  postgres_data:

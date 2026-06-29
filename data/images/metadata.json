@@ -1,0 +1,12 @@
+{
+  "_comment": "Map image filenames to metadata for local image ingestion",
+  "example_screenshot.png": {
+    "image_id": "example001",
+    "caption": "Student Portal login screen",
+    "alt_text": "Login page for student portal",
+    "article_id": "3",
+    "category": "Student Portal",
+    "keywords": "login,student portal,password",
+    "source_url": "https://helpdesk.amref.ac.ke/knowledgebase.php?article=3"
+  }
+}
