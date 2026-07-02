@@ -1,6 +1,13 @@
 """CLI script to run knowledge base ingestion."""
 
 import asyncio
+import sys
+from pathlib import Path
+
+# Allow running from the project root without the package being installed.
+# Inside Docker this is redundant (pip install -e . handles it) but keeps
+# the script working for local runs too — same pattern as verify_db_credentials.py
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from backend.app.database.session import async_session_factory, init_db
 from backend.app.ingest.pipeline import IngestionPipeline
