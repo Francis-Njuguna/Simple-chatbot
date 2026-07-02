@@ -28,25 +28,47 @@ services:
   backend:
     build:
       context: .
-      target: backend          # ← uses the "backend" stage in the Dockerfile
-    image: amref-helpdesk-rag-backend   # ← explicit, unambiguous image name
+      target: backend
+    image: amref-helpdesk-rag-backend
     ports:
       - "8000:8000"
+    # Load the real secrets file (.env), NOT .env.example.
+    # Copy .env.example → .env and fill in real values before running.
     env_file:
-      - .env.example
+      - .env
     environment:
-      POSTGRES_HOST: postgres
-      POSTGRES_PORT: 5432
-      # LLM
+      # --- PostgreSQL credentials (must mirror the postgres service above) ---
+      # Declared explicitly here so they are visible, auditable, and cannot be
+      # silently shadowed by a stale or missing .env value.
+      POSTGRES_USER: amref
+      POSTGRES_PASSWORD: amref_secret
+      POSTGRES_DB: amref_helpdesk
+
+      # --- Assembled DATABASE_URL (convenience; config.py also builds it from
+      #     the four POSTGRES_* parts, so both must stay in sync) ---
+      DATABASE_URL: postgresql+asyncpg://amref:amref_secret@postgres:5432/amref_helpdesk
+
+      # --- Docker-internal host / path overrides ---
+      POSTGRES_HOST: postgres         # service name, not localhost
+      POSTGRES_PORT: "5432"
+      CHROMA_PERSIST_DIR: /app/data/chroma
+      DATA_DIR: /app/data
+      RAW_DATA_DIR: /app/data/raw
+      PROCESSED_DATA_DIR: /app/data/processed
+      IMAGES_DIR: /app/data/images
+      STATIC_IMAGES_DIR: /app/backend/app/static/images
+      LOG_FILE: /app/logs/app.log
+
+      # --- LLM ---
       LLM_PROVIDER: anthropic
-      ANTHROPIC_MODEL: claude-3-5-haiku-20241022
-      # Embeddings
+      ANTHROPIC_MODEL: claude-sonnet-4-5
+
+      # --- Embeddings (Ollama runs on the Docker host) ---
       EMBEDDING_PROVIDER: ollama
       OLLAMA_EMBEDDING_MODEL: nomic-embed-text
-      # Ollama runs on the Docker host — use host-gateway
       OLLAMA_BASE_URL: http://host.docker.internal:11434
     extra_hosts:
-      - "host.docker.internal:host-gateway"
+      - "host.docker.internal:host-gateway"   # Linux host-gateway support
     volumes:
       - ./data:/app/data
       - ./logs:/app/logs
@@ -54,7 +76,6 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
-    # No --reload in production; use workers=1 for single-container simplicity
     command: uvicorn backend.app.main:app --host 0.0.0.0 --port 8000 --workers 1
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
@@ -68,18 +89,21 @@ services:
   frontend:
     build:
       context: .
-      target: frontend         # ← uses the "frontend" stage in the Dockerfile
-    image: amref-helpdesk-rag-frontend  # ← explicit, unambiguous image name
+      target: frontend
+    image: amref-helpdesk-rag-frontend
     ports:
       - "8501:8501"
-    env_file:
-      - .env.example
     environment:
       API_BASE_URL: http://backend:8000/api/v1
       BACKEND_URL: http://backend:8000
     depends_on:
-      - backend
-    command: streamlit run frontend/streamlit_app.py --server.port 8501 --server.address 0.0.0.0
+      backend:
+        condition: service_healthy    # wait until backend /health passes
+    command: >
+      streamlit run frontend/streamlit_app.py
+      --server.port 8501
+      --server.address 0.0.0.0
+      --server.headless true
 
 volumes:
   postgres_data:

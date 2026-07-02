@@ -9,8 +9,8 @@ build/
 .venv/
 venv/
 
-# Environment
-.env.example
+# Environment — keep the template, never commit the real secrets file
+.env
 .env.local
 
 # Data & models

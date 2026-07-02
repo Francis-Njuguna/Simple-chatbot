@@ -15,7 +15,7 @@ class LLMService:
     """Configurable LLM provider for answer generation.
 
     Provider priority (set via LLM_PROVIDER env var):
-        anthropic  → Claude 3.5 Haiku / Sonnet  (default)
+        anthropic  → haiku-4-5/ Sonnet  (default)
         openai     → GPT-4o (fallback)
         ollama     → local Llama / Mistral etc.  (offline fallback)
     """

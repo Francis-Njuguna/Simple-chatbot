@@ -1,4 +1,18 @@
-"""Application configuration via environment variables."""
+"""Application configuration via environment variables.
+
+Credential precedence for the PostgreSQL connection
+----------------------------------------------------
+The connection URL is resolved in this order (first match wins):
+
+1. ``DATABASE_URL`` env var — if set, it is used verbatim and the four
+   ``POSTGRES_*`` variables are only used for display / healthcheck purposes.
+2. Assembled from ``POSTGRES_USER``, ``POSTGRES_PASSWORD``,
+   ``POSTGRES_HOST``, ``POSTGRES_PORT``, and ``POSTGRES_DB``.
+
+Always keep ``DATABASE_URL`` and the four ``POSTGRES_*`` vars in sync
+inside both ``.env`` and ``docker-compose.yml`` to avoid split-brain
+configuration.
+"""
 
 from functools import lru_cache
 from pathlib import Path
@@ -29,29 +43,42 @@ class Settings(BaseSettings):
     jwt_expire_minutes: int = Field(default=1440, alias="JWT_EXPIRE_MINUTES")
     rate_limit: str = Field(default="30/minute", alias="RATE_LIMIT")
 
-    # PostgreSQL (Docker)
+    # ------------------------------------------------------------------
+    # PostgreSQL — individual credential components
+    # These must match the POSTGRES_* env vars given to the postgres
+    # Docker service in docker-compose.yml.
+    # ------------------------------------------------------------------
     postgres_host: str = Field(default="localhost", alias="POSTGRES_HOST")
     postgres_port: int = Field(default=5432, alias="POSTGRES_PORT")
     postgres_user: str = Field(default="amref", alias="POSTGRES_USER")
     postgres_password: str = Field(default="amref_secret", alias="POSTGRES_PASSWORD")
     postgres_db: str = Field(default="amref_helpdesk", alias="POSTGRES_DB")
 
+    # Optional pre-assembled URL override.  When set it takes precedence over
+    # the four POSTGRES_* parts so that tooling that only speaks DATABASE_URL
+    # (e.g. Alembic, direct psql wrappers) and the app always share one URL.
+    database_url_override: Optional[str] = Field(default=None, alias="DATABASE_URL")
+
+    # ------------------------------------------------------------------
+    # ChromaDB
+    # ------------------------------------------------------------------
     chroma_host: str = Field(default="localhost", alias="CHROMA_HOST")
     chroma_port: int = Field(default=8001, alias="CHROMA_PORT")
     chroma_persist_dir: str = Field(default="./data/chroma", alias="CHROMA_PERSIST_DIR")
 
-    # LLM Provider: "anthropic" | "openai" | "ollama"
+    # ------------------------------------------------------------------
+    # LLM — Anthropic Claude (primary)
+    # Provider options: "anthropic" | "openai" | "ollama"
+    # ------------------------------------------------------------------
     llm_provider: Literal["anthropic", "openai", "ollama"] = Field(
         default="anthropic", alias="LLM_PROVIDER"
     )
 
-    # Anthropic (primary LLM)
+    # Anthropic
     anthropic_api_key: str = Field(default="", alias="ANTHROPIC_API_KEY")
-    # claude-3-5-haiku-20241022  → fastest + cheapest
-    # claude-3-5-sonnet-20241022 → best quality
-    anthropic_model: str = Field(default="claude-3-5-haiku-20241022", alias="ANTHROPIC_MODEL")
+    anthropic_model: str = Field(default="claude-sonnet-4-5", alias="ANTHROPIC_MODEL")
 
-    # OpenAI (kept as optional fallback)
+    # OpenAI (optional fallback)
     openai_api_key: str = Field(default="", alias="OPENAI_API_KEY")
     openai_model: str = Field(default="gpt-4o", alias="OPENAI_MODEL")
 
@@ -59,20 +86,24 @@ class Settings(BaseSettings):
     ollama_base_url: str = Field(default="http://localhost:11434", alias="OLLAMA_BASE_URL")
     ollama_model: str = Field(default="llama3.2", alias="OLLAMA_MODEL")
 
-    # Embedding provider: "ollama" | "sentence-transformers"
+    # ------------------------------------------------------------------
+    # Embeddings
+    # Provider options: "ollama" | "sentence-transformers"
+    # ------------------------------------------------------------------
     embedding_provider: Literal["ollama", "sentence-transformers"] = Field(
         default="ollama", alias="EMBEDDING_PROVIDER"
     )
-    # Used when embedding_provider = "sentence-transformers"
     embedding_model: str = Field(
         default="sentence-transformers/all-MiniLM-L6-v2", alias="EMBEDDING_MODEL"
     )
     embedding_device: str = Field(default="cpu", alias="EMBEDDING_DEVICE")
-    # Used when embedding_provider = "ollama"
     ollama_embedding_model: str = Field(
         default="nomic-embed-text", alias="OLLAMA_EMBEDDING_MODEL"
     )
 
+    # ------------------------------------------------------------------
+    # RAG pipeline
+    # ------------------------------------------------------------------
     chunk_size: int = Field(default=500, alias="CHUNK_SIZE")
     chunk_overlap: int = Field(default=50, alias="CHUNK_OVERLAP")
     top_k_retrieval: int = Field(default=5, alias="TOP_K_RETRIEVAL")
@@ -96,17 +127,40 @@ class Settings(BaseSettings):
     log_level: str = Field(default="INFO", alias="LOG_LEVEL")
     log_file: str = Field(default="./logs/app.log", alias="LOG_FILE")
 
-    @computed_field
+    # ------------------------------------------------------------------
+    # Computed connection URLs
+    # ------------------------------------------------------------------
+
+    @computed_field  # type: ignore[misc]
     @property
     def database_url(self) -> str:
+        """Async SQLAlchemy URL (postgresql+asyncpg://).
+
+        Returns ``DATABASE_URL`` verbatim when it is set in the environment,
+        falling back to assembling the URL from the four POSTGRES_* parts.
+        The asyncpg driver prefix is enforced so SQLAlchemy always gets the
+        correct dialect regardless of how the env var was written.
+        """
+        if self.database_url_override:
+            url = self.database_url_override
+            # Normalise bare "postgresql://" → "postgresql+asyncpg://"
+            if url.startswith("postgresql://"):
+                url = url.replace("postgresql://", "postgresql+asyncpg://", 1)
+            return url
         return (
             f"postgresql+asyncpg://{self.postgres_user}:{self.postgres_password}"
             f"@{self.postgres_host}:{self.postgres_port}/{self.postgres_db}"
         )
 
-    @computed_field
+    @computed_field  # type: ignore[misc]
     @property
     def sync_database_url(self) -> str:
+        """Synchronous psycopg2 URL for Alembic / sync tooling."""
+        if self.database_url_override:
+            url = self.database_url_override
+            # Strip asyncpg driver if present so sync tools don't choke.
+            url = url.replace("postgresql+asyncpg://", "postgresql://")
+            return url
         return (
             f"postgresql://{self.postgres_user}:{self.postgres_password}"
             f"@{self.postgres_host}:{self.postgres_port}/{self.postgres_db}"
@@ -123,6 +177,21 @@ class Settings(BaseSettings):
             str(Path(self.log_file).parent),
         ]:
             Path(path).mkdir(parents=True, exist_ok=True)
+
+    def log_db_config(self) -> None:
+        """Emit a redacted summary of the active DB config to stdout.
+
+        Called once during application startup so operators can confirm
+        which credentials are actually in use without exposing the password.
+        """
+        masked = "*" * len(self.postgres_password)
+        safe_url = self.database_url.replace(self.postgres_password, masked)
+        print(
+            f"[config] DB config → host={self.postgres_host} "
+            f"port={self.postgres_port} user={self.postgres_user} "
+            f"db={self.postgres_db} password={'set' if self.postgres_password else 'EMPTY'}\n"
+            f"[config] database_url (redacted) → {safe_url}"
+        )
 
 
 @lru_cache
