@@ -116,6 +116,15 @@ class Settings(BaseSettings):
         default="https://helpdesk.amref.ac.ke/knowledgebase.php", alias="KB_INDEX_URL"
     )
 
+    # Explicit list of category IDs to crawl.
+    # Comma-separated string in env, e.g. KB_CATEGORY_IDS=1,2,3,5
+    # When set, the crawler uses ONLY these categories instead of
+    # discovering them dynamically from the index page.
+    kb_category_ids: str = Field(
+        default="1,2,3,5,6,7,8,9,10,11,12,13,14,15",
+        alias="KB_CATEGORY_IDS",
+    )
+
     data_dir: str = Field(default="./data", alias="DATA_DIR")
     raw_data_dir: str = Field(default="./data/raw", alias="RAW_DATA_DIR")
     processed_data_dir: str = Field(default="./data/processed", alias="PROCESSED_DATA_DIR")
@@ -126,6 +135,15 @@ class Settings(BaseSettings):
 
     log_level: str = Field(default="INFO", alias="LOG_LEVEL")
     log_file: str = Field(default="./logs/app.log", alias="LOG_FILE")
+
+    # ------------------------------------------------------------------
+    # Computed helpers
+    # ------------------------------------------------------------------
+
+    @property
+    def kb_category_id_list(self) -> list[str]:
+        """Return KB_CATEGORY_IDS as a clean list of string IDs."""
+        return [c.strip() for c in self.kb_category_ids.split(",") if c.strip()]
 
     # ------------------------------------------------------------------
     # Computed connection URLs

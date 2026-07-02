@@ -39,7 +39,7 @@ COPY requirements-backend.txt ./
 RUN pip install --no-cache-dir -r requirements-backend.txt
 
 # Copy source
-COPY pyproject.toml ./
+COPY pyproject.toml README.md ./
 COPY backend ./backend
 COPY scripts ./scripts
 COPY data    ./data

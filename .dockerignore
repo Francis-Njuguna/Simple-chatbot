@@ -145,7 +145,6 @@ Jenkinsfile
 # ──────────────────────────────────────────────
 # Documentation & non-runtime files
 # ──────────────────────────────────────────────
-*.md
 *.rst
 CHANGELOG.md
 CONTRIBUTING.md
@@ -153,7 +152,7 @@ LICENSE
 docs/
 
 # ──────────────────────────────────────────────
-# Secrets (keep .env.example for docker-compose env_file)
+# Secrets
 # ──────────────────────────────────────────────
 .env
 .env.local
@@ -162,10 +161,3 @@ docs/
 *.key
 *.crt
 *.p12
-
-# ──────────────────────────────────────────────
-# Python project metadata (no longer needed —
-# deps are installed via requirements-*.txt)
-# ──────────────────────────────────────────────
-pyproject.toml
-README.md

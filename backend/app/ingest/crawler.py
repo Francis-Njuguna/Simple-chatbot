@@ -30,13 +30,29 @@ class ArticleData:
 
 
 class KnowledgeBaseCrawler:
-    """Crawls the Amref Help Desk knowledge base."""
+    """Crawls the Amref Help Desk knowledge base.
+
+    Uses the explicit category list from KB_CATEGORY_IDS in config/env:
+        1, 2, 3, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15
+
+    For each category page every article link is collected, then each
+    article is fetched and parsed.
+    """
+
+    # Explicit category IDs to crawl (loaded from settings)
+    CATEGORY_IDS: list[str] = []
 
     def __init__(self) -> None:
         self.settings = get_settings()
         self.base_url = self.settings.kb_base_url
         self.index_url = self.settings.kb_index_url
+        self.CATEGORY_IDS = self.settings.kb_category_id_list
         self._client_timeout = httpx.Timeout(30.0, connect=10.0)
+        logger.info(
+            "Crawler initialised with %d explicit categories: %s",
+            len(self.CATEGORY_IDS),
+            ", ".join(self.CATEGORY_IDS),
+        )
 
     async def _fetch(self, client: httpx.AsyncClient, url: str) -> str:
         response = await client.get(url, follow_redirects=True)
@@ -44,6 +60,7 @@ class KnowledgeBaseCrawler:
         return response.text
 
     def _discover_links(self, html: str) -> tuple[set[str], set[str]]:
+        """Extract article and category IDs from a page's HTML."""
         soup = BeautifulSoup(html, "lxml")
         article_ids: set[str] = set()
         category_ids: set[str] = set()
@@ -104,35 +121,36 @@ class KnowledgeBaseCrawler:
         )
 
     async def discover_all_article_ids(self) -> set[str]:
-        """Discover every article ID by crawling index and category pages."""
+        """Collect article IDs by fetching each explicit category page.
+
+        Only the categories defined in KB_CATEGORY_IDS are visited:
+            1, 2, 3, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15
+
+        No dynamic link-following — every category is fetched directly.
+        """
         discovered_articles: set[str] = set()
-        discovered_categories: set[str] = set()
-        to_visit_categories: set[str] = set()
 
         async with httpx.AsyncClient(timeout=self._client_timeout) as client:
-            index_html = await self._fetch(client, self.index_url)
-            articles, categories = self._discover_links(index_html)
-            discovered_articles.update(articles)
-            to_visit_categories.update(categories)
-
-            while to_visit_categories:
-                cat_id = to_visit_categories.pop()
-                if cat_id in discovered_categories:
-                    continue
-                discovered_categories.add(cat_id)
+            for cat_id in self.CATEGORY_IDS:
                 cat_url = f"{self.base_url}/knowledgebase.php?category={cat_id}"
                 try:
+                    logger.info("Crawling category %s → %s", cat_id, cat_url)
                     cat_html = await self._fetch(client, cat_url)
-                    cat_articles, cat_categories = self._discover_links(cat_html)
-                    discovered_articles.update(cat_articles)
-                    to_visit_categories.update(cat_categories - discovered_categories)
+                    article_ids, _ = self._discover_links(cat_html)
+                    logger.info(
+                        "Category %s — found %d article(s): %s",
+                        cat_id,
+                        len(article_ids),
+                        ", ".join(sorted(article_ids, key=int)) if article_ids else "none",
+                    )
+                    discovered_articles.update(article_ids)
                 except httpx.HTTPError as exc:
                     logger.warning("Failed to crawl category %s: %s", cat_id, exc)
 
         logger.info(
-            "Discovered %d articles across %d categories",
+            "Discovered %d unique articles across %d categories",
             len(discovered_articles),
-            len(discovered_categories),
+            len(self.CATEGORY_IDS),
         )
         return discovered_articles
 
