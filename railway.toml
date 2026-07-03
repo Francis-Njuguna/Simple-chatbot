@@ -1,0 +1,57 @@
+# =============================================================================
+# Railway configuration — Amref Help Desk RAG
+#
+# This file tells Railway how to build and run BOTH services from the same
+# repo.  Each [[services]] block maps to one Railway service that you create
+# in the dashboard.
+#
+# Deployment flow
+# ---------------
+# 1. Push this repo to GitHub.
+# 2. On railway.app → New Project → "Deploy from GitHub repo".
+# 3. Railway auto-detects this file and creates the services below.
+# 4. Add a PostgreSQL plugin (Database → Add → PostgreSQL).
+# 5. Set environment variables per service (see .env.railway.example).
+# 6. Deploy — Railway builds the Docker image and starts each service.
+# =============================================================================
+
+[build]
+# Use the repo-root Dockerfile for all services.
+# Each service overrides the target stage via the environment variable
+# RAILWAY_DOCKERFILE_TARGET (set in the Railway dashboard per service).
+dockerfile = "Dockerfile"
+
+# ---------------------------------------------------------------------------
+# Backend service
+# Set RAILWAY_DOCKERFILE_TARGET=backend in the Railway dashboard for this
+# service, or Railway will use the last stage (frontend) by default.
+# ---------------------------------------------------------------------------
+[[services]]
+name = "backend"
+
+[services.build]
+dockerfilePath = "Dockerfile"
+dockerfileTarget = "backend"
+
+[services.deploy]
+# Railway injects $PORT automatically; the CMD in the Dockerfile uses it.
+healthcheckPath = "/health"
+healthcheckTimeout = 30
+restartPolicyType = "on_failure"
+restartPolicyMaxRetries = 3
+
+# ---------------------------------------------------------------------------
+# Frontend service
+# ---------------------------------------------------------------------------
+[[services]]
+name = "frontend"
+
+[services.build]
+dockerfilePath = "Dockerfile"
+dockerfileTarget = "frontend"
+
+[services.deploy]
+healthcheckPath = "/_stcore/health"
+healthcheckTimeout = 30
+restartPolicyType = "on_failure"
+restartPolicyMaxRetries = 3

@@ -1,8 +1,6 @@
 services:
   # ---------------------------------------------------------------------------
   # PostgreSQL — persistent relational store
-  # Run standalone: docker compose up postgres -d
-  # Tables are created automatically on first app startup via init_db().
   # ---------------------------------------------------------------------------
   postgres:
     image: postgres:16-alpine
@@ -22,8 +20,6 @@ services:
 
   # ---------------------------------------------------------------------------
   # FastAPI backend
-  # LLM  : Anthropic Claude (ANTHROPIC_API_KEY required in .env)
-  # Embed: Ollama nomic-embed-text (Ollama must be running on the host)
   # ---------------------------------------------------------------------------
   backend:
     build:
@@ -32,25 +28,18 @@ services:
     image: amref-helpdesk-rag-backend
     ports:
       - "8000:8000"
-    # Load the real secrets file (.env), NOT .env.example.
-    # Copy .env.example → .env and fill in real values before running.
     env_file:
       - .env
     environment:
-      # --- PostgreSQL credentials (must mirror the postgres service above) ---
-      # Declared explicitly here so they are visible, auditable, and cannot be
-      # silently shadowed by a stale or missing .env value.
+      # --- PostgreSQL ---
       POSTGRES_USER: amref
       POSTGRES_PASSWORD: amref_secret
       POSTGRES_DB: amref_helpdesk
-
-      # --- Assembled DATABASE_URL (convenience; config.py also builds it from
-      #     the four POSTGRES_* parts, so both must stay in sync) ---
       DATABASE_URL: postgresql+asyncpg://amref:amref_secret@postgres:5432/amref_helpdesk
-
-      # --- Docker-internal host / path overrides ---
-      POSTGRES_HOST: postgres         # service name, not localhost
+      POSTGRES_HOST: postgres
       POSTGRES_PORT: "5432"
+
+      # --- Docker-internal path overrides ---
       CHROMA_PERSIST_DIR: /app/data/chroma
       DATA_DIR: /app/data
       RAW_DATA_DIR: /app/data/raw
@@ -63,12 +52,16 @@ services:
       LLM_PROVIDER: anthropic
       ANTHROPIC_MODEL: claude-sonnet-4-5
 
-      # --- Embeddings (Ollama runs on the Docker host) ---
-      EMBEDDING_PROVIDER: ollama
-      OLLAMA_EMBEDDING_MODEL: nomic-embed-text
-      OLLAMA_BASE_URL: http://host.docker.internal:11434
-    extra_hosts:
-      - "host.docker.internal:host-gateway"   # Linux host-gateway support
+      # --- Embeddings (sentence-transformers — no Ollama needed) ---
+      EMBEDDING_PROVIDER: sentence-transformers
+      EMBEDDING_MODEL: sentence-transformers/all-MiniLM-L6-v2
+      EMBEDDING_DEVICE: cpu
+
+      # --- Knowledge Base — explicit category list ---
+      KB_BASE_URL: https://helpdesk.amref.ac.ke
+      KB_INDEX_URL: https://helpdesk.amref.ac.ke/knowledgebase.php
+      KB_CATEGORY_IDS: "1,2,3,5,6,7,8,9,10,11,12,13,14,15"
+
     volumes:
       - ./data:/app/data
       - ./logs:/app/logs
@@ -98,7 +91,7 @@ services:
       BACKEND_URL: http://backend:8000
     depends_on:
       backend:
-        condition: service_healthy    # wait until backend /health passes
+        condition: service_healthy
     command: >
       streamlit run frontend/streamlit_app.py
       --server.port 8501
