@@ -55,9 +55,12 @@ yarn.lock
 pnpm-lock.yaml
 
 # ──────────────────────────────────────────────
-# Large runtime data — mounted as volumes instead
+# Large runtime data
+# NOTE: data/chroma/ is intentionally NOT excluded here so that the
+# pre-built ChromaDB vector store is baked into the Railway Docker image.
+# On Railway (free tier) there are no persistent volume mounts, so the
+# knowledge-base data must travel inside the image.
 # ──────────────────────────────────────────────
-data/chroma/
 data/raw/
 data/processed/
 

@@ -5,6 +5,12 @@
 #   base      : slim Python image + OS deps shared by both services
 #   backend   : installs backend Python deps + copies backend/scripts/data
 #   frontend  : installs ONLY streamlit + httpx, copies frontend/
+#
+# Railway notes
+#   - Railway injects $PORT at runtime; CMD uses a shell form so the variable
+#     is expanded correctly.
+#   - Ollama is NOT available on Railway, so embeddings must use
+#     sentence-transformers (set EMBEDDING_PROVIDER=sentence-transformers).
 # =============================================================================
 
 # -----------------------------------------------------------------------------
@@ -52,7 +58,9 @@ RUN pip install --no-cache-dir -e .
 RUN mkdir -p logs data/chroma backend/app/static/images
 
 EXPOSE 8000
-CMD ["uvicorn", "backend.app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+
+# Shell form so Railway's $PORT variable is expanded at runtime.
+CMD uvicorn backend.app.main:app --host 0.0.0.0 --port ${PORT:-8000}
 
 # -----------------------------------------------------------------------------
 # frontend — only streamlit + httpx (tiny image, fast build)
@@ -66,5 +74,9 @@ RUN pip install --no-cache-dir -r requirements-frontend.txt
 COPY frontend ./frontend
 
 EXPOSE 8501
-CMD ["streamlit", "run", "frontend/streamlit_app.py", \
-     "--server.port", "8501", "--server.address", "0.0.0.0"]
+
+# Shell form so Railway's $PORT variable is expanded at runtime.
+CMD streamlit run frontend/streamlit_app.py \
+    --server.port ${PORT:-8501} \
+    --server.address 0.0.0.0 \
+    --server.headless true

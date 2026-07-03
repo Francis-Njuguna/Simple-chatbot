@@ -52,18 +52,16 @@ services:
       LLM_PROVIDER: anthropic
       ANTHROPIC_MODEL: claude-sonnet-4-5
 
-      # --- Embeddings ---
-      EMBEDDING_PROVIDER: ollama
-      OLLAMA_EMBEDDING_MODEL: nomic-embed-text
-      OLLAMA_BASE_URL: http://host.docker.internal:11434
+      # --- Embeddings (sentence-transformers — no Ollama needed) ---
+      EMBEDDING_PROVIDER: sentence-transformers
+      EMBEDDING_MODEL: sentence-transformers/all-MiniLM-L6-v2
+      EMBEDDING_DEVICE: cpu
 
       # --- Knowledge Base — explicit category list ---
       KB_BASE_URL: https://helpdesk.amref.ac.ke
       KB_INDEX_URL: https://helpdesk.amref.ac.ke/knowledgebase.php
       KB_CATEGORY_IDS: "1,2,3,5,6,7,8,9,10,11,12,13,14,15"
 
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
     volumes:
       - ./data:/app/data
       - ./logs:/app/logs

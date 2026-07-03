@@ -1,0 +1,22 @@
+# =============================================================================
+# Railway config — Backend service
+#
+# In the Railway dashboard for this service set:
+#   Settings → Source → Root Directory = backend
+#
+# Railway will use this file automatically once the root directory is set.
+# =============================================================================
+
+[build]
+# Path is relative to the root directory set in Railway (i.e. backend/).
+# We point UP one level because the build context must include the whole
+# repo (backend/app, data/, pyproject.toml, etc.).
+# Railway always builds from the repo root when rootDirectory is set,
+# so Dockerfile paths here are relative to the repo root.
+dockerfilePath = "backend/Dockerfile"
+
+[deploy]
+healthcheckPath = "/health"
+healthcheckTimeout = 30
+restartPolicyType = "on_failure"
+restartPolicyMaxRetries = 3
