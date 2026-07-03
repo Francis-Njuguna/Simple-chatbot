@@ -1,0 +1,59 @@
+# =============================================================================
+# Dockerfile.frontend
+#
+# Standalone frontend image for Railway (or any single-stage build system).
+# Extracted from the original multi-stage Dockerfile — base + frontend stages.
+#
+# Railway usage:
+#   Service → Settings → Source → Dockerfile Path: Dockerfile.frontend
+#
+# Environment variables (set in Railway dashboard):
+#   API_BASE_URL  — e.g. https://your-backend.up.railway.app/api/v1
+#   BACKEND_URL   — e.g. https://your-backend.up.railway.app
+#   Both default to http://localhost:8000[/api/v1] for local development.
+#
+# Notes:
+#   - Railway injects $PORT at runtime; CMD uses shell form so the variable
+#     is expanded correctly.
+# =============================================================================
+
+# -----------------------------------------------------------------------------
+# base — OS-level build tools shared with the backend image
+# -----------------------------------------------------------------------------
+FROM python:3.11-slim AS base
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=1
+
+WORKDIR /app
+
+# libpq-dev      : asyncpg / psycopg native build
+# build-essential: compilers for hnswlib, tokenizers, grpcio, etc.
+# curl           : healthcheck in docker-compose
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        build-essential \
+        libpq-dev \
+        curl \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN pip install --upgrade pip
+
+# -----------------------------------------------------------------------------
+# frontend — only streamlit + httpx (tiny image, fast build)
+# -----------------------------------------------------------------------------
+FROM base
+
+# Install ONLY what the Streamlit app needs
+COPY requirements-frontend.txt ./
+RUN pip install --no-cache-dir -r requirements-frontend.txt
+
+COPY frontend ./frontend
+
+EXPOSE 8501
+
+# Shell form so Railway's $PORT variable is expanded at runtime.
+CMD streamlit run frontend/streamlit_app.py \
+    --server.port ${PORT:-8501} \
+    --server.address 0.0.0.0 \
+    --server.headless true

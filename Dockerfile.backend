@@ -1,0 +1,66 @@
+# =============================================================================
+# Dockerfile.backend
+#
+# Standalone backend image for Railway (or any single-stage build system).
+# Extracted from the original multi-stage Dockerfile — base + backend stages.
+#
+# Railway usage:
+#   Service → Settings → Source → Dockerfile Path: Dockerfile.backend
+#
+# Notes:
+#   - Railway injects $PORT at runtime; CMD uses shell form so the variable
+#     is expanded correctly.
+#   - Ollama is NOT available on Railway — set:
+#       EMBEDDING_PROVIDER=sentence-transformers
+#       EMBEDDING_MODEL=sentence-transformers/all-MiniLM-L6-v2
+#       EMBEDDING_DEVICE=cpu
+# =============================================================================
+
+# -----------------------------------------------------------------------------
+# base — OS-level build tools shared with the frontend image
+# -----------------------------------------------------------------------------
+FROM python:3.11-slim AS base
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=1
+
+WORKDIR /app
+
+# libpq-dev      : asyncpg / psycopg native build
+# build-essential: compilers for hnswlib, tokenizers, grpcio, etc.
+# curl           : healthcheck in docker-compose
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        build-essential \
+        libpq-dev \
+        curl \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN pip install --upgrade pip
+
+# -----------------------------------------------------------------------------
+# backend — all server-side dependencies
+# -----------------------------------------------------------------------------
+FROM base AS backend
+
+# Install backend Python deps first (layer-cached unless requirements change)
+COPY requirements-backend.txt ./
+RUN pip install --no-cache-dir -r requirements-backend.txt
+
+# Copy source
+COPY pyproject.toml README.md ./
+COPY backend ./backend
+COPY scripts ./scripts
+COPY data    ./data
+
+# Install the backend package in editable mode so that
+# `import backend` works from any working directory (fixes
+# ModuleNotFoundError: No module named 'backend' in scripts/)
+RUN pip install --no-cache-dir -e .
+
+RUN mkdir -p logs data/chroma backend/app/static/images
+
+EXPOSE 8000
+
+# Shell form so Railway's $PORT variable is expanded at runtime.
+CMD uvicorn backend.app.main:app --host 0.0.0.0 --port ${PORT:-8000}
