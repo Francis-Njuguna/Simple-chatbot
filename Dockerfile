@@ -73,10 +73,16 @@ RUN pip install --no-cache-dir -r requirements-frontend.txt
 
 COPY frontend ./frontend
 
+# Embeddable chat widget — Streamlit serves files from the `static/` folder
+# next to the app script at /app/static/<file> when static serving is enabled.
+# Deployed URL: https://<frontend-domain>/app/static/chat-widget.js
+RUN cp -r frontend/widget frontend/static
+
 EXPOSE 8501
 
 # Shell form so Railway's $PORT variable is expanded at runtime.
 CMD streamlit run frontend/streamlit_app.py \
     --server.port ${PORT:-8501} \
     --server.address 0.0.0.0 \
-    --server.headless true
+    --server.headless true \
+    --server.enableStaticServing true

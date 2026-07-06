@@ -1,0 +1,27 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Chat Widget — Local Test Page</title>
+  <style>
+    body { font-family: sans-serif; max-width: 720px; margin: 40px auto; color: #222; }
+  </style>
+</head>
+<body>
+  <h1>Host Page (simulates your PHP site)</h1>
+  <p>
+    The floating chat button should appear in the bottom-right corner.
+    Serve this folder (e.g. <code>python -m http.server 8080</code> from
+    <code>frontend/widget</code>) and make sure the FastAPI backend is
+    running on <code>http://localhost:8000</code>.
+  </p>
+
+  <!-- This is the single tag you paste into your PHP template.
+       Change data-api-base to your deployed backend URL in production. -->
+  <script
+    src="chat-widget.js"
+    data-api-base="http://localhost:8000/api/v1"
+    defer></script>
+</body>
+</html>
