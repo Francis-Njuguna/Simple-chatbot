@@ -78,6 +78,8 @@ services:
 
   # ---------------------------------------------------------------------------
   # Streamlit frontend
+  # (also serves the embeddable chat widget at /app/static/chat-widget.js
+  #  via Streamlit static file serving)
   # ---------------------------------------------------------------------------
   frontend:
     build:
@@ -97,6 +99,7 @@ services:
       --server.port 8501
       --server.address 0.0.0.0
       --server.headless true
+      --server.enableStaticServing true
 
 volumes:
   postgres_data:

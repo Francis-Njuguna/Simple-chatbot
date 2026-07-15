@@ -22,7 +22,7 @@ CUSTOM_CSS = """
     .main-header {
         font-size: 1.8rem;
         font-weight: 700;
-        color: #1a5276;
+        color: red;
         margin-bottom: 0.25rem;
     }
     .sub-header {
