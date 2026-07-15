@@ -2,15 +2,20 @@
 # Does not touch the backend, Streamlit frontend, or their Dockerfiles.
 FROM nginx:alpine
 
-# Minimal nginx config: correct Content-Type for .js + permissive CORS
-# so the widget can be embedded/fetched from the PHP site's domain.
-COPY nginx.conf /etc/nginx/conf.d/default.conf
+# Minimal nginx config template: correct Content-Type for .js + permissive
+# CORS so the widget can be embedded/fetched from the PHP site's domain.
+# ${PORT} in the template is substituted at container start (see CMD).
+COPY nginx.conf /etc/nginx/templates/default.conf.template
 
 # Copy only the widget's static assets from the frontend directory.
 COPY frontend/widget/index.html    /usr/share/nginx/html/index.html
 COPY frontend/widget/chat-widget.css /usr/share/nginx/html/chat-widget.css
 COPY frontend/widget/chat-widget.js  /usr/share/nginx/html/chat-widget.js
 
+# Fallback for local runs; Railway overrides this with its dynamic $PORT.
+ENV PORT=80
 EXPOSE 80
 
-CMD ["nginx", "-g", "daemon off;"]
+# Substitute ONLY ${PORT} (so nginx runtime vars like $uri and
+# $request_method are left untouched), then start nginx in the foreground.
+CMD ["/bin/sh", "-c", "envsubst '${PORT}' < /etc/nginx/templates/default.conf.template > /etc/nginx/conf.d/default.conf && exec nginx -g 'daemon off;'"]
