@@ -1,6 +1,7 @@
 /* ==========================================================================
-   Amref Help Desk Chat Widget — minimal CSS (black / white / grey palette)
+   Amref Help Desk Chat Widget — Amref brand CSS (red / black / white palette)
    All classes are prefixed with `acw-` to avoid clashes with host-page CSS.
+   Brand colors: Amref red #D71920, black #111, white #fff
    ========================================================================== */
 
 .acw-root,
@@ -21,9 +22,9 @@
   width: 56px;
   height: 56px;
   border-radius: 50%;
-  background: #111;
+  background: #d71920;
   color: #fff;
-  border: 1px solid #333;
+  border: 1px solid #b0141a;
   cursor: pointer;
   display: flex;
   align-items: center;
@@ -34,7 +35,7 @@
 }
 
 .acw-toggle:hover {
-  background: #333;
+  background: #b0141a;
   transform: scale(1.06);
 }
 
@@ -77,13 +78,14 @@
 /* ---------------- Header ---------------- */
 
 .acw-header {
-  background: #111;
+  background: #d71920;
   color: #fff;
   padding: 12px 14px;
   display: flex;
   align-items: center;
   justify-content: space-between;
   flex-shrink: 0;
+  border-bottom: 3px solid #111;
 }
 
 .acw-header-title {
@@ -93,7 +95,7 @@
 
 .acw-header-sub {
   font-size: 0.72rem;
-  color: #bbb;
+  color: #ffd6d8;
   margin-top: 2px;
 }
 
@@ -104,8 +106,8 @@
 
 .acw-header-btn {
   background: transparent;
-  border: 1px solid #444;
-  color: #ccc;
+  border: 1px solid rgba(255, 255, 255, 0.55);
+  color: #fff;
   border-radius: 6px;
   font-size: 0.72rem;
   padding: 4px 8px;
@@ -113,7 +115,7 @@
 }
 
 .acw-header-btn:hover {
-  background: #333;
+  background: #b0141a;
   color: #fff;
 }
 
@@ -122,7 +124,7 @@
 .acw-category-bar {
   padding: 8px 12px;
   border-bottom: 1px solid #e5e5e5;
-  background: #f5f5f5;
+  background: #fff;
   flex-shrink: 0;
 }
 
@@ -132,9 +134,13 @@
   border: 1px solid #ccc;
   border-radius: 6px;
   background: #fff;
-  color: #222;
+  color: #111;
   font-size: 0.8rem;
   outline: none;
+}
+
+.acw-category-bar select:focus {
+  border-color: #d71920;
 }
 
 /* ---------------- Messages area ---------------- */
@@ -143,7 +149,7 @@
   flex: 1;
   overflow-y: auto;
   padding: 12px;
-  background: #fafafa;
+  background: #fff;
   display: flex;
   flex-direction: column;
   gap: 8px;
@@ -161,26 +167,26 @@
 
 .acw-msg-user {
   align-self: flex-end;
-  background: #222;
+  background: #d71920;
   color: #fff;
   border-radius: 14px 14px 4px 14px;
 }
 
 .acw-msg-assistant {
   align-self: flex-start;
-  background: #efefef;
-  color: #222;
+  background: #f5f5f5;
+  color: #111;
   border: 1px solid #e0e0e0;
   border-radius: 14px 14px 14px 4px;
 }
 
 .acw-msg-assistant a {
-  color: #111;
+  color: #d71920;
   text-decoration: underline;
 }
 
 .acw-welcome {
-  color: #888;
+  color: #555;
   font-size: 0.8rem;
   text-align: center;
   padding: 16px 8px;
@@ -192,7 +198,7 @@
   align-self: flex-start;
   max-width: 88%;
   font-size: 0.72rem;
-  color: #666;
+  color: #444;
   display: flex;
   flex-direction: column;
   gap: 4px;
@@ -203,18 +209,18 @@
   align-self: flex-start;
   padding: 2px 9px;
   border-radius: 10px;
-  background: #e3e3e3;
-  color: #444;
+  background: #111;
+  color: #fff;
   font-size: 0.7rem;
 }
 
 .acw-sources summary {
   cursor: pointer;
-  color: #555;
+  color: #111;
 }
 
 .acw-sources a {
-  color: #333;
+  color: #d71920;
 }
 
 .acw-images {
@@ -251,11 +257,11 @@
 }
 
 .acw-star.acw-star-on {
-  color: #222;
+  color: #d71920;
 }
 
 .acw-feedback-thanks {
-  color: #777;
+  color: #555;
   font-size: 0.7rem;
   margin-left: 4px;
 }
@@ -272,9 +278,9 @@
 
 .acw-error {
   align-self: center;
-  color: #7a1f1f;
-  background: #f4e0e0;
-  border: 1px solid #e0c4c4;
+  color: #d71920;
+  background: #fdecec;
+  border: 1px solid #f3b8ba;
   border-radius: 8px;
   padding: 6px 10px;
   font-size: 0.75rem;
@@ -297,7 +303,7 @@
   border-radius: 8px;
   padding: 9px 11px;
   font-size: 0.85rem;
-  color: #222;
+  color: #111;
   outline: none;
   resize: none;
   max-height: 90px;
@@ -305,11 +311,11 @@
 }
 
 .acw-input:focus {
-  border-color: #555;
+  border-color: #d71920;
 }
 
 .acw-send {
-  background: #111;
+  background: #d71920;
   color: #fff;
   border: none;
   border-radius: 8px;
@@ -320,11 +326,11 @@
 }
 
 .acw-send:hover:not(:disabled) {
-  background: #333;
+  background: #b0141a;
 }
 
 .acw-send:disabled {
-  background: #999;
+  background: #e79a9d;
   cursor: not-allowed;
 }
 
@@ -333,10 +339,10 @@
 .acw-footer {
   text-align: center;
   font-size: 0.65rem;
-  color: #999;
+  color: #fff;
   padding: 5px 8px 7px;
-  background: #fff;
-  border-top: 1px solid #f0f0f0;
+  background: #111;
+  border-top: 2px solid #d71920;
   flex-shrink: 0;
 }
 
