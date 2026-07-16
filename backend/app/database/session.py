@@ -1,4 +1,13 @@
-"""Async database session management."""
+"""Async database session management.
+
+The engine is created once at import time from ``Settings.database_url``.
+The resolved (redacted) connection string is logged here — at the single
+point where ``create_async_engine`` is called — so every entrypoint that
+touches the database (FastAPI app, scripts/ingest.py, scripts/inspect_kb.py)
+shows exactly which credentials and host are in use, and gets the
+split-brain warning from ``Settings.log_db_config()`` when a DATABASE_URL
+override disagrees with the POSTGRES_* variables.
+"""
 
 from collections.abc import AsyncGenerator
 
@@ -8,6 +17,12 @@ from backend.app.config import get_settings
 from backend.app.database.models import Base
 
 _settings = get_settings()
+
+# Surface the resolved DB target (redacted) before the first connection is
+# attempted, so an InvalidPasswordError can immediately be correlated with
+# the credentials/source that produced it.
+_settings.log_db_config()
+
 engine = create_async_engine(_settings.database_url, echo=_settings.debug, pool_pre_ping=True)
 async_session_factory = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
 
