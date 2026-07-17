@@ -1,4 +1,17 @@
-"""ChromaDB client and collection management."""
+"""ChromaDB client and collection management.
+
+Client selection
+----------------
+``get_chroma_client()`` picks the backend based on config (see Settings):
+
+- **HTTP mode** — connects to a standalone Chroma server (e.g. a separate
+  Railway service) via ``chromadb.HttpClient``. Chosen when
+  ``CHROMA_MODE=http`` or (``CHROMA_MODE=auto`` and ``CHROMA_SERVER_HOST``
+  is set).
+- **Persistent mode** — reads an on-disk store via ``chromadb.PersistentClient``
+  at ``CHROMA_PERSIST_DIR``. Used for the pre-built vector store baked into the
+  Docker image, or a mounted Railway volume. This is the default.
+"""
 
 from functools import lru_cache
 from typing import Any
@@ -18,8 +31,25 @@ IMAGE_COLLECTION = "amref_image_embeddings"
 @lru_cache
 def get_chroma_client() -> chromadb.ClientAPI:
     settings = get_settings()
+
+    if settings.use_chroma_http:
+        host = settings.chroma_server_host or settings.chroma_host
+        port = settings.chroma_server_port
+        client = chromadb.HttpClient(
+            host=host,
+            port=port,
+            ssl=settings.chroma_server_ssl,
+        )
+        logger.info(
+            "ChromaDB HttpClient connected → %s://%s:%d",
+            "https" if settings.chroma_server_ssl else "http",
+            host,
+            port,
+        )
+        return client
+
     client = chromadb.PersistentClient(path=settings.chroma_persist_dir)
-    logger.info("ChromaDB client initialized at %s", settings.chroma_persist_dir)
+    logger.info("ChromaDB PersistentClient initialized at %s", settings.chroma_persist_dir)
     return client
 
 

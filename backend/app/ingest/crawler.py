@@ -1,21 +1,111 @@
 """Knowledge base web crawler."""
 
+import os
 import re
+import ssl
+import warnings
 from dataclasses import dataclass, field
-from typing import Optional
+from typing import Optional, Union
 from urllib.parse import urljoin
 
+import certifi
 import httpx
 from bs4 import BeautifulSoup
 
 from backend.app.config import get_settings
 from backend.app.utils.logging import get_logger
 from backend.app.utils.text import clean_html, extract_images_from_html, extract_title
+from backend.app.utils.tls import build_kb_ssl_context
 
 logger = get_logger(__name__)
 
 ARTICLE_PATTERN = re.compile(r"knowledgebase\.php\?article=(\d+)", re.IGNORECASE)
 CATEGORY_PATTERN = re.compile(r"knowledgebase\.php\?category=(\d+)", re.IGNORECASE)
+
+# Ensure certifi is the process-wide default for any library that reads these.
+os.environ.setdefault("SSL_CERT_FILE", certifi.where())
+os.environ.setdefault("REQUESTS_CA_BUNDLE", certifi.where())
+
+# ⚠️  DEBUG WORKAROUND — HARD OVERRIDE ⚠️
+# The single httpx client factory below (`_new_client`) is the ONE code path
+# every category- and article-crawl request goes through. Previous attempts to
+# disable verification via KB_VERIFY_SSL only took effect if that env var was
+# set, and the diagnostics showed it was NOT — so the client was still built
+# with an SSLContext and kept throwing CERTIFICATE_VERIFY_FAILED.
+#
+# This flag forces verify=False on the real crawl constructor unconditionally,
+# independent of env resolution, so the crawl can complete against
+# helpdesk.amref.ac.ke's incomplete certificate chain.
+#
+# INSECURE (MITM-exploitable). This is a local debugging switch only — flip it
+# back to False and rely on KB_VERIFY_SSL / KB_CA_BUNDLE before deploying.
+_FORCE_DISABLE_TLS_VERIFY = True
+
+
+def _resolve_verify() -> Union[ssl.SSLContext, bool]:
+    """Resolve the httpx ``verify`` value for the crawler.
+
+    ⚠️  SECURITY / DEBUG WORKAROUND ⚠️
+    ---------------------------------
+    ``helpdesk.amref.ac.ke`` serves an incomplete TLS chain (missing
+    intermediate CA), which no CA bundle can validate. To let ingestion run
+    against it during debugging, TLS verification can be turned OFF by setting
+    ``KB_VERIFY_SSL=false`` in the environment, or by the hard override
+    ``_FORCE_DISABLE_TLS_VERIFY`` above. When disabled, ``verify=False`` is
+    passed to httpx (equivalent to an ``ssl`` context with ``CERT_NONE``), so
+    the crawler accepts ANY certificate.
+
+    This is INSECURE (vulnerable to man-in-the-middle) and must NOT be enabled
+    in a production/deployed build. As a guardrail we REFUSE to disable
+    verification when ``APP_ENV`` looks like production, falling back to the
+    secure context instead.
+    """
+    settings = get_settings()
+
+    disable_requested = _FORCE_DISABLE_TLS_VERIFY or (not settings.kb_verify_ssl)
+
+    if disable_requested:
+        env = (settings.app_env or "").strip().lower()
+        if env in {"production", "prod", "staging"}:
+            logger.error(
+                "TLS verify disable requested (KB_VERIFY_SSL=%s, "
+                "_FORCE_DISABLE_TLS_VERIFY=%s) but APP_ENV=%s — REFUSING to "
+                "disable TLS verification in a production-like environment. "
+                "Falling back to secure verification.",
+                settings.kb_verify_ssl,
+                _FORCE_DISABLE_TLS_VERIFY,
+                settings.app_env,
+            )
+            return build_kb_ssl_context()
+
+        logger.warning(
+            "!!! TLS VERIFICATION DISABLED for the KB crawler "
+            "(KB_VERIFY_SSL=%s, _FORCE_DISABLE_TLS_VERIFY=%s). This is a DEBUG "
+            "workaround for helpdesk.amref.ac.ke's incomplete certificate chain "
+            "and is INSECURE (MITM-exploitable). DO NOT ship this to production. !!!",
+            settings.kb_verify_ssl,
+            _FORCE_DISABLE_TLS_VERIFY,
+        )
+        # httpx accepts verify=False to disable cert + hostname checks entirely.
+        return False
+
+    # Secure path: certifi roots + auto-recovered intermediate.
+    return build_kb_ssl_context()
+
+
+def _log_tls_diagnostics(verify: object) -> None:
+    """Print exactly which code + trust material is live, to prove the path."""
+    disabled = verify is False
+    logger.warning("=== CRAWLER TLS DIAGNOSTICS ===")
+    logger.warning("crawler module file : %s", __file__)
+    logger.warning("certifi.where()     : %s", certifi.where())
+    logger.warning("SSL_CERT_FILE env   : %s", os.environ.get("SSL_CERT_FILE"))
+    logger.warning("_FORCE_DISABLE_TLS  : %s", _FORCE_DISABLE_TLS_VERIFY)
+    logger.warning(
+        "verify value        : %s",
+        "False (VERIFICATION OFF)" if disabled else type(verify).__name__,
+    )
+    logger.warning("===============================")
 
 
 @dataclass
@@ -48,11 +138,30 @@ class KnowledgeBaseCrawler:
         self.index_url = self.settings.kb_index_url
         self.CATEGORY_IDS = self.settings.kb_category_id_list
         self._client_timeout = httpx.Timeout(30.0, connect=10.0)
+        # SSLContext (verification on, with the server's intermediate recovered)
+        # or False when disabled (DEBUG-only insecure mode).
+        self._verify = _resolve_verify()
+        _log_tls_diagnostics(self._verify)
         logger.info(
             "Crawler initialised with %d explicit categories: %s",
             len(self.CATEGORY_IDS),
             ", ".join(self.CATEGORY_IDS),
         )
+
+    def _new_client(self) -> httpx.AsyncClient:
+        """Create the AsyncClient used for EVERY category/article crawl request.
+
+        This is the single, real constructor path. When verification is
+        disabled we pass ``verify=False`` explicitly and silence the resulting
+        InsecureRequestWarning noise so the log stays readable — the loud
+        security warning in ``_resolve_verify`` already covers the implication.
+        """
+        if self._verify is False:
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore")
+                # Explicit verify=False on the actual crawl client.
+                return httpx.AsyncClient(timeout=self._client_timeout, verify=False)
+        return httpx.AsyncClient(timeout=self._client_timeout, verify=self._verify)
 
     async def _fetch(self, client: httpx.AsyncClient, url: str) -> str:
         response = await client.get(url, follow_redirects=True)
@@ -130,7 +239,7 @@ class KnowledgeBaseCrawler:
         """
         discovered_articles: set[str] = set()
 
-        async with httpx.AsyncClient(timeout=self._client_timeout) as client:
+        async with self._new_client() as client:
             for cat_id in self.CATEGORY_IDS:
                 cat_url = f"{self.base_url}/knowledgebase.php?category={cat_id}"
                 try:
@@ -144,6 +253,8 @@ class KnowledgeBaseCrawler:
                         ", ".join(sorted(article_ids, key=int)) if article_ids else "none",
                     )
                     discovered_articles.update(article_ids)
+                except httpx.ConnectError as exc:
+                    logger.error("CONNECT/TLS error crawling category %s: %r", cat_id, exc)
                 except httpx.HTTPError as exc:
                     logger.warning("Failed to crawl category %s: %s", cat_id, exc)
 
@@ -156,10 +267,13 @@ class KnowledgeBaseCrawler:
 
     async def crawl_article(self, article_id: str) -> Optional[ArticleData]:
         url = f"{self.base_url}/knowledgebase.php?article={article_id}"
-        async with httpx.AsyncClient(timeout=self._client_timeout) as client:
+        async with self._new_client() as client:
             try:
                 html = await self._fetch(client, url)
                 return self._parse_article(article_id, html, url)
+            except httpx.ConnectError as exc:
+                logger.error("CONNECT/TLS error crawling article %s: %r", article_id, exc)
+                return None
             except httpx.HTTPError as exc:
                 logger.error("Failed to crawl article %s: %s", article_id, exc)
                 return None

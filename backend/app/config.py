@@ -67,7 +67,24 @@ class Settings(BaseSettings):
 
     # ------------------------------------------------------------------
     # ChromaDB
+    #
+    # CHROMA_MODE selects how the vector store is reached:
+    #   "auto"       (default) — use HttpClient if CHROMA_SERVER_HOST is set,
+    #                            otherwise fall back to a local PersistentClient
+    #                            reading CHROMA_PERSIST_DIR (baked image / volume).
+    #   "persistent" — always use the on-disk PersistentClient.
+    #   "http"       — always connect to a standalone Chroma server over HTTP.
+    #
+    # CHROMA_SERVER_HOST / CHROMA_SERVER_PORT point at a standalone Chroma
+    # service (e.g. a separate Railway service). When unset, persistent mode is
+    # used. (CHROMA_HOST/CHROMA_PORT are kept for backwards compatibility.)
     # ------------------------------------------------------------------
+    chroma_mode: Literal["auto", "persistent", "http"] = Field(
+        default="auto", alias="CHROMA_MODE"
+    )
+    chroma_server_host: Optional[str] = Field(default=None, alias="CHROMA_SERVER_HOST")
+    chroma_server_port: int = Field(default=8000, alias="CHROMA_SERVER_PORT")
+    chroma_server_ssl: bool = Field(default=False, alias="CHROMA_SERVER_SSL")
     chroma_host: str = Field(default="localhost", alias="CHROMA_HOST")
     chroma_port: int = Field(default=8001, alias="CHROMA_PORT")
     chroma_persist_dir: str = Field(default="./data/chroma", alias="CHROMA_PERSIST_DIR")
@@ -122,6 +139,24 @@ class Settings(BaseSettings):
         default="https://helpdesk.amref.ac.ke/knowledgebase.php", alias="KB_INDEX_URL"
     )
 
+    # ------------------------------------------------------------------
+    # Crawler TLS configuration
+    #
+    # The Amref help desk host frequently serves an INCOMPLETE certificate
+    # chain (it omits the intermediate CA cert), which yields:
+    #   [SSL: CERTIFICATE_VERIFY_FAILED] unable to get local issuer certificate
+    # No CA bundle (certifi or system) can verify such a chain because the
+    # intermediate needed to link the leaf to a trusted root is missing.
+    #
+    # KB_CA_BUNDLE — path to a custom PEM bundle that contains the missing
+    #   intermediate CA (recommended fix; keeps verification ON).
+    # KB_VERIFY_SSL — set to false as a last-resort escape hatch to skip
+    #   verification for the crawler only (does NOT affect the DB or LLM
+    #   clients).  Defaults to true.
+    # ------------------------------------------------------------------
+    kb_ca_bundle: Optional[str] = Field(default=None, alias="KB_CA_BUNDLE")
+    kb_verify_ssl: bool = Field(default=True, alias="KB_VERIFY_SSL")
+
     # Explicit list of category IDs to crawl.
     # Comma-separated string in env, e.g. KB_CATEGORY_IDS=1,2,3,5
     # When set, the crawler uses ONLY these categories instead of
@@ -150,6 +185,21 @@ class Settings(BaseSettings):
     def kb_category_id_list(self) -> list[str]:
         """Return KB_CATEGORY_IDS as a clean list of string IDs."""
         return [c.strip() for c in self.kb_category_ids.split(",") if c.strip()]
+
+    @property
+    def use_chroma_http(self) -> bool:
+        """Whether to connect to a standalone Chroma server over HTTP.
+
+        - CHROMA_MODE=http       → always HTTP (requires CHROMA_SERVER_HOST).
+        - CHROMA_MODE=persistent → never HTTP.
+        - CHROMA_MODE=auto       → HTTP only when CHROMA_SERVER_HOST is set.
+        """
+        if self.chroma_mode == "http":
+            return True
+        if self.chroma_mode == "persistent":
+            return False
+        # auto
+        return bool(self.chroma_server_host)
 
     # ------------------------------------------------------------------
     # Computed connection URLs

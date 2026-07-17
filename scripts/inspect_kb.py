@@ -4,10 +4,12 @@ inspect_kb.py
 Inspect what is currently stored in the knowledge base.
 
 Shows:
-  1. ChromaDB — text chunk count and sample chunks
-  2. ChromaDB — image embedding count and sample images
-  3. Raw article files on disk (data/raw/)
-  4. PostgreSQL — document metadata table summary
+  1. Embedding model — the dimension actually stored, the inferred model, and
+     whether it matches the currently-configured EMBEDDING_PROVIDER
+  2. ChromaDB — text chunk count and sample chunks
+  3. ChromaDB — image embedding count and sample images
+  4. Raw article files on disk (data/raw/)
+  5. PostgreSQL — document metadata table summary
 
 Run from the project root:
     python scripts/inspect_kb.py                  # summary only
@@ -31,8 +33,25 @@ from backend.app.database.chroma import get_image_collection, get_text_collectio
 _GREEN  = "\033[32m"
 _CYAN   = "\033[36m"
 _YELLOW = "\033[33m"
+_RED    = "\033[31m"
 _BOLD   = "\033[1m"
 _RESET  = "\033[0m"
+
+# Known embedding dimensions → model. Extend as new models are used.
+_DIM_TO_MODEL = {
+    768: "nomic-embed-text (Ollama)",
+    384: "all-MiniLM-L6-v2 (sentence-transformers)",
+    1536: "text-embedding-3-small / ada-002 (OpenAI)",
+    3072: "text-embedding-3-large (OpenAI)",
+}
+
+# Which embedding dimension each configured provider PRODUCES, so we can warn
+# on a query-vs-stored mismatch that would silently break retrieval.
+_PROVIDER_EXPECTED_DIM = {
+    "ollama": 768,                 # nomic-embed-text
+    "sentence-transformers": 384,  # all-MiniLM-L6-v2
+}
+
 
 def _header(title: str) -> None:
     width = 60
@@ -42,6 +61,76 @@ def _header(title: str) -> None:
 
 def _ok(label: str, value: object) -> None:
     print(f"  {_GREEN}•{_RESET} {_BOLD}{label}:{_RESET} {value}")
+
+def _warn(msg: str) -> None:
+    print(f"  {_YELLOW}⚠  {msg}{_RESET}")
+
+def _err(msg: str) -> None:
+    print(f"  {_RED}✘  {msg}{_RESET}")
+
+
+# ---------------------------------------------------------------------------
+# 0. Embedding model — read the stored dimension and infer the model
+# ---------------------------------------------------------------------------
+
+def _stored_embedding_dim() -> int | None:
+    """Return the dimension of one stored text embedding, or None if empty."""
+    col = get_text_collection()
+    if col.count() == 0:
+        return None
+    result = col.get(limit=1, include=["embeddings"])
+    embeddings = result.get("embeddings") or []
+    if len(embeddings) == 0 or embeddings[0] is None:
+        return None
+    return len(embeddings[0])
+
+
+def inspect_embedding_model() -> None:
+    _header("Embedding Model (which model embedded the chunks)")
+    settings = get_settings()
+
+    configured_provider = settings.embedding_provider
+    if configured_provider == "ollama":
+        configured_model = settings.ollama_embedding_model
+    else:
+        configured_model = settings.embedding_model
+
+    _ok("Configured provider (for NEW queries/ingests)", configured_provider)
+    _ok("Configured model", configured_model)
+
+    try:
+        dim = _stored_embedding_dim()
+    except Exception as e:  # ChromaDB not reachable, etc.
+        _err(f"Could not read stored embeddings: {e}")
+        return
+
+    if dim is None:
+        _warn("No embeddings stored yet — the DB is empty. Run: python scripts/ingest.py")
+        return
+
+    inferred = _DIM_TO_MODEL.get(dim, "UNKNOWN model")
+    _ok("Stored vector dimension", dim)
+    _ok("=> Chunks were embedded by", inferred)
+
+    # Mismatch check: does the provider used for queries produce the same dim?
+    expected_dim = _PROVIDER_EXPECTED_DIM.get(configured_provider)
+    if expected_dim is None:
+        _warn(
+            f"Don't know the expected dimension for provider "
+            f"'{configured_provider}' — cannot verify match."
+        )
+    elif expected_dim != dim:
+        _err(
+            f"MISMATCH! Stored vectors are {dim}-dim ({inferred}), but the "
+            f"configured provider '{configured_provider}' produces {expected_dim}-dim "
+            f"queries. Retrieval WILL break (dimension error or garbage results)."
+        )
+        print(
+            "       Fix: re-ingest with the provider that matches your deployment,\n"
+            "            or point EMBEDDING_PROVIDER at the one that built this DB."
+        )
+    else:
+        print(f"  {_GREEN}✓  Query provider matches stored vectors ({dim}-dim).{_RESET}")
 
 
 # ---------------------------------------------------------------------------
@@ -238,6 +327,7 @@ def main() -> None:
     print("  Amref Help Desk — Knowledge Base Inspector")
     print(f"{'=' * 60}{_RESET}")
 
+    inspect_embedding_model()
     inspect_raw_files(full=args.full)
     inspect_text_chunks(num_samples=args.samples, full=args.full)
     inspect_images(num_samples=args.samples, full=args.full)
