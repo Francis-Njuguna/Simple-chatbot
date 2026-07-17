@@ -6,17 +6,22 @@ The connection URL is resolved in this order (first match wins):
 
 1. ``DATABASE_URL`` env var — if set, it is used verbatim and the four
    ``POSTGRES_*`` variables are only used for display / healthcheck purposes.
+   NOTE: pydantic-settings gives *process environment variables* priority
+   over the ``.env`` file, so a stale ``DATABASE_URL`` exported in your
+   shell silently overrides everything in ``.env``.
 2. Assembled from ``POSTGRES_USER``, ``POSTGRES_PASSWORD``,
    ``POSTGRES_HOST``, ``POSTGRES_PORT``, and ``POSTGRES_DB``.
 
-Always keep ``DATABASE_URL`` and the four ``POSTGRES_*`` vars in sync
-inside both ``.env`` and ``docker-compose.yml`` to avoid split-brain
-configuration.
+Local development keeps ONLY the four POSTGRES_* parts in ``.env`` (single
+source of truth).  ``DATABASE_URL`` is reserved for environments that inject
+it explicitly (docker-compose, Railway).  ``log_db_config()`` prints which
+source was used and warns loudly when the two sources disagree.
 """
 
 from functools import lru_cache
 from pathlib import Path
 from typing import Literal, Optional
+from urllib.parse import urlsplit
 
 from pydantic import Field, computed_field
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -56,12 +61,30 @@ class Settings(BaseSettings):
 
     # Optional pre-assembled URL override.  When set it takes precedence over
     # the four POSTGRES_* parts so that tooling that only speaks DATABASE_URL
-    # (e.g. Alembic, direct psql wrappers) and the app always share one URL.
+    # (e.g. Alembic, Railway's injected variable) and the app share one URL.
+    # Deliberately NOT set in .env for local runs — see module docstring.
     database_url_override: Optional[str] = Field(default=None, alias="DATABASE_URL")
 
     # ------------------------------------------------------------------
     # ChromaDB
+    #
+    # CHROMA_MODE selects how the vector store is reached:
+    #   "auto"       (default) — use HttpClient if CHROMA_SERVER_HOST is set,
+    #                            otherwise fall back to a local PersistentClient
+    #                            reading CHROMA_PERSIST_DIR (baked image / volume).
+    #   "persistent" — always use the on-disk PersistentClient.
+    #   "http"       — always connect to a standalone Chroma server over HTTP.
+    #
+    # CHROMA_SERVER_HOST / CHROMA_SERVER_PORT point at a standalone Chroma
+    # service (e.g. a separate Railway service). When unset, persistent mode is
+    # used. (CHROMA_HOST/CHROMA_PORT are kept for backwards compatibility.)
     # ------------------------------------------------------------------
+    chroma_mode: Literal["auto", "persistent", "http"] = Field(
+        default="auto", alias="CHROMA_MODE"
+    )
+    chroma_server_host: Optional[str] = Field(default=None, alias="CHROMA_SERVER_HOST")
+    chroma_server_port: int = Field(default=8000, alias="CHROMA_SERVER_PORT")
+    chroma_server_ssl: bool = Field(default=False, alias="CHROMA_SERVER_SSL")
     chroma_host: str = Field(default="localhost", alias="CHROMA_HOST")
     chroma_port: int = Field(default=8001, alias="CHROMA_PORT")
     chroma_persist_dir: str = Field(default="./data/chroma", alias="CHROMA_PERSIST_DIR")
@@ -116,6 +139,24 @@ class Settings(BaseSettings):
         default="https://helpdesk.amref.ac.ke/knowledgebase.php", alias="KB_INDEX_URL"
     )
 
+    # ------------------------------------------------------------------
+    # Crawler TLS configuration
+    #
+    # The Amref help desk host frequently serves an INCOMPLETE certificate
+    # chain (it omits the intermediate CA cert), which yields:
+    #   [SSL: CERTIFICATE_VERIFY_FAILED] unable to get local issuer certificate
+    # No CA bundle (certifi or system) can verify such a chain because the
+    # intermediate needed to link the leaf to a trusted root is missing.
+    #
+    # KB_CA_BUNDLE — path to a custom PEM bundle that contains the missing
+    #   intermediate CA (recommended fix; keeps verification ON).
+    # KB_VERIFY_SSL — set to false as a last-resort escape hatch to skip
+    #   verification for the crawler only (does NOT affect the DB or LLM
+    #   clients).  Defaults to true.
+    # ------------------------------------------------------------------
+    kb_ca_bundle: Optional[str] = Field(default=None, alias="KB_CA_BUNDLE")
+    kb_verify_ssl: bool = Field(default=True, alias="KB_VERIFY_SSL")
+
     # Explicit list of category IDs to crawl.
     # Comma-separated string in env, e.g. KB_CATEGORY_IDS=1,2,3,5
     # When set, the crawler uses ONLY these categories instead of
@@ -144,6 +185,21 @@ class Settings(BaseSettings):
     def kb_category_id_list(self) -> list[str]:
         """Return KB_CATEGORY_IDS as a clean list of string IDs."""
         return [c.strip() for c in self.kb_category_ids.split(",") if c.strip()]
+
+    @property
+    def use_chroma_http(self) -> bool:
+        """Whether to connect to a standalone Chroma server over HTTP.
+
+        - CHROMA_MODE=http       → always HTTP (requires CHROMA_SERVER_HOST).
+        - CHROMA_MODE=persistent → never HTTP.
+        - CHROMA_MODE=auto       → HTTP only when CHROMA_SERVER_HOST is set.
+        """
+        if self.chroma_mode == "http":
+            return True
+        if self.chroma_mode == "persistent":
+            return False
+        # auto
+        return bool(self.chroma_server_host)
 
     # ------------------------------------------------------------------
     # Computed connection URLs
@@ -184,6 +240,34 @@ class Settings(BaseSettings):
             f"@{self.postgres_host}:{self.postgres_port}/{self.postgres_db}"
         )
 
+    @property
+    def database_url_source(self) -> str:
+        """Human-readable description of where database_url came from."""
+        if self.database_url_override:
+            return "DATABASE_URL (override — env var or .env)"
+        return "POSTGRES_* parts (assembled)"
+
+    def redacted_database_url(self) -> str:
+        """Return database_url with the *actual* password in the URL masked.
+
+        Unlike a naive ``replace(postgres_password, ...)`` this parses the
+        URL, so an override URL carrying a DIFFERENT password than
+        POSTGRES_PASSWORD is still redacted and never leaks into logs.
+        """
+        url = self.database_url
+        try:
+            parts = urlsplit(url)
+            if parts.password:
+                masked_netloc = parts.netloc.replace(f":{parts.password}@", ":***@", 1)
+                url = url.replace(parts.netloc, masked_netloc, 1)
+        except ValueError:
+            # Unparseable URL — redact everything between "//" and "@" defensively.
+            head, sep, tail = url.partition("@")
+            if sep:
+                scheme_end = head.find("//") + 2
+                url = head[:scheme_end] + "***:***" + sep + tail
+        return url
+
     def ensure_dirs(self) -> None:
         for path in [
             self.data_dir,
@@ -199,17 +283,54 @@ class Settings(BaseSettings):
     def log_db_config(self) -> None:
         """Emit a redacted summary of the active DB config to stdout.
 
-        Called once during application startup so operators can confirm
-        which credentials are actually in use without exposing the password.
+        Called at engine creation (backend/app/database/session.py) so EVERY
+        entrypoint — the FastAPI app, scripts/ingest.py, scripts/inspect_kb.py
+        — surfaces which credentials are actually in use, without exposing
+        the password.  Also detects "split-brain" configuration: when a
+        DATABASE_URL override disagrees with the POSTGRES_* parts.
         """
-        masked = "*" * len(self.postgres_password)
-        safe_url = self.database_url.replace(self.postgres_password, masked)
         print(
             f"[config] DB config → host={self.postgres_host} "
             f"port={self.postgres_port} user={self.postgres_user} "
-            f"db={self.postgres_db} password={'set' if self.postgres_password else 'EMPTY'}\n"
-            f"[config] database_url (redacted) → {safe_url}"
+            f"db={self.postgres_db} password={'set' if self.postgres_password else 'EMPTY'}"
         )
+        print(f"[config] database_url source → {self.database_url_source}")
+        print(f"[config] database_url (redacted) → {self.redacted_database_url()}")
+
+        if not self.database_url_override:
+            return
+
+        # Split-brain detection: compare the override URL against the
+        # POSTGRES_* parts and warn on every mismatched component.
+        try:
+            parts = urlsplit(self.database_url)
+        except ValueError:
+            print("[config] WARNING: DATABASE_URL could not be parsed for validation.")
+            return
+
+        mismatches: list[str] = []
+        if parts.username and parts.username != self.postgres_user:
+            mismatches.append(f"user ('{parts.username}' != '{self.postgres_user}')")
+        if parts.password and parts.password != self.postgres_password:
+            mismatches.append("password (values differ — redacted)")
+        if parts.hostname and parts.hostname != self.postgres_host:
+            mismatches.append(f"host ('{parts.hostname}' != '{self.postgres_host}')")
+        if parts.port and parts.port != self.postgres_port:
+            mismatches.append(f"port ({parts.port} != {self.postgres_port})")
+        db_name = (parts.path or "").lstrip("/")
+        if db_name and db_name != self.postgres_db:
+            mismatches.append(f"database ('{db_name}' != '{self.postgres_db}')")
+
+        if mismatches:
+            print(
+                "[config] WARNING: split-brain DB configuration detected!\n"
+                "[config]   DATABASE_URL overrides the POSTGRES_* variables but "
+                "disagrees with them on: " + ", ".join(mismatches) + "\n"
+                "[config]   If this is a local run, a stale DATABASE_URL is likely "
+                "exported in your shell or left in .env.\n"
+                "[config]   Fix: `unset DATABASE_URL` (or remove it from .env) so the "
+                "POSTGRES_* parts are used, or update it to match."
+            )
 
 
 @lru_cache

@@ -9,6 +9,7 @@ import httpx
 
 from backend.app.config import get_settings
 from backend.app.utils.logging import get_logger
+from backend.app.utils.tls import build_kb_ssl_context
 
 logger = get_logger(__name__)
 
@@ -24,6 +25,9 @@ class ImageProcessor:
         self.static_dir = Path(self.settings.static_images_dir)
         self.images_dir.mkdir(parents=True, exist_ok=True)
         self.static_dir.mkdir(parents=True, exist_ok=True)
+        # Same TLS handling as the crawler — images live on the same host
+        # that serves the incomplete certificate chain.
+        self._verify = build_kb_ssl_context()
 
     def _generate_image_id(self, source: str) -> str:
         return hashlib.sha256(source.encode()).hexdigest()[:16]
@@ -37,7 +41,9 @@ class ImageProcessor:
         caption: Optional[str] = None,
     ) -> Optional[dict[str, Any]]:
         try:
-            async with httpx.AsyncClient(timeout=30.0, follow_redirects=True) as client:
+            async with httpx.AsyncClient(
+                timeout=30.0, follow_redirects=True, verify=self._verify
+            ) as client:
                 response = await client.get(url)
                 response.raise_for_status()
                 content_type = response.headers.get("content-type", "")

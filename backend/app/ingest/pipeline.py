@@ -144,7 +144,38 @@ class IngestionPipeline:
         logger.info("Stored %d text chunks in ChromaDB", total)
         return total
 
+    @staticmethod
+    def _dedupe_images_by_id(images: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        """Keep one entry per unique image_id.
+
+        image_id is derived from the image URL, so a shared asset (e.g. the
+        amiuhelp.png logo that appears on nearly every article) yields the same
+        id from many articles. Without deduping, the batched lists handed to
+        ChromaDB's upsert() contain duplicate ids within a single call, which
+        raises chromadb.errors.DuplicateIDError. Dedupe once, up front, so both
+        the Chroma upsert and the per-image Postgres writes see unique ids.
+        """
+        seen: set[str] = set()
+        unique: list[dict[str, Any]] = []
+        for img in images:
+            image_id = img["image_id"]
+            if image_id in seen:
+                continue
+            seen.add(image_id)
+            unique.append(img)
+
+        dropped = len(images) - len(unique)
+        if dropped:
+            logger.info(
+                "Deduplicated images: %d duplicate id(s) collapsed (%d unique of %d collected)",
+                dropped,
+                len(unique),
+                len(images),
+            )
+        return unique
+
     async def _store_images(self, images: list[dict[str, Any]]) -> int:
+        images = self._dedupe_images_by_id(images)
         if not images:
             return 0
 
