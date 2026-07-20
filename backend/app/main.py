@@ -10,6 +10,13 @@ The ``slowapi`` ``Limiter`` singleton used to be defined here, which caused an
 The limiter now lives in ``backend.app.core.limiter`` – a leaf module with no
 back-references to this file – so both ``main.py`` and every route can import
 it freely.
+
+Startup warm-up
+---------------
+The single biggest source of the old "first request takes 30–60s" behaviour was
+loading the SentenceTransformer model (and building the LLM HTTP client) lazily
+*inside the first user request*. We now warm all heavy singletons during
+``lifespan`` startup so the very first query is fast.
 """
 
 from contextlib import asynccontextmanager
@@ -29,9 +36,52 @@ from backend.app.api.routes import auth, chat, feedback, history, ingest
 from backend.app.config import get_settings
 from backend.app.database.session import init_db
 from backend.app.utils.exceptions import AppError, app_error_to_http
-from backend.app.utils.logging import setup_logging
+from backend.app.utils.logging import get_logger, setup_logging
 
 settings = get_settings()
+logger = get_logger(__name__)
+
+
+# ---------------------------------------------------------------------------
+# Startup warm-up
+# ---------------------------------------------------------------------------
+
+async def _warmup() -> None:
+    """Build and prime every heavy singleton so the first request is fast.
+
+    * Loads the embedding backend (SentenceTransformer weights / Ollama pool)
+      and runs one dummy embedding so torch / the model graph is fully warm.
+    * Builds the LLM chat client (and its HTTP connection pool).
+    * Opens the Chroma client + collection handles.
+
+    Any failure here is logged but never blocks startup — a degraded service
+    that lazily warms on first request is better than one that won't boot.
+    """
+    import anyio
+
+    from backend.app.database.chroma import get_text_collection
+    from backend.app.rag.embeddings import get_embedding_service
+    from backend.app.rag.llm import get_llm_service
+
+    try:
+        embedder = get_embedding_service()
+        # Force the model to load + run a real forward pass off the event loop.
+        await embedder.embed_query_async("warmup")
+        logger.info("Warm-up: embedding model ready.")
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Warm-up: embedding warm-up failed (%s)", exc)
+
+    try:
+        get_llm_service()
+        logger.info("Warm-up: LLM client ready.")
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Warm-up: LLM client build failed (%s)", exc)
+
+    try:
+        await anyio.to_thread.run_sync(get_text_collection)
+        logger.info("Warm-up: Chroma collection ready.")
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Warm-up: Chroma warm-up failed (%s)", exc)
 
 
 # ---------------------------------------------------------------------------
@@ -46,6 +96,8 @@ async def lifespan(app: FastAPI):
     * Logs the active (redacted) database URL so credential mismatches are
       immediately visible in the container logs.
     * Creates all SQL tables on first run (idempotent via ``CREATE IF NOT EXISTS``).
+    * Warms heavy singletons (embedding model, LLM client, Chroma) so the first
+      request does not pay cold-start costs.
     """
     setup_logging()
 
@@ -55,7 +107,13 @@ async def lifespan(app: FastAPI):
     settings.log_db_config()
 
     await init_db()
+    await _warmup()
     yield
+
+    # Graceful shutdown of the shared async HTTP client used for Ollama embeds.
+    from backend.app.rag.embeddings import close_async_http_client
+
+    await close_async_http_client()
 
 
 # ---------------------------------------------------------------------------

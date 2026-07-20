@@ -1,4 +1,15 @@
-"""FastAPI dependency injection."""
+"""FastAPI dependency injection.
+
+Performance note
+----------------
+``RAGService`` is intentionally lightweight — it only binds a request-scoped DB
+session.  Its heavy collaborators (the embedding model / HTTP pools and the LLM
+chat client) are *process-wide singletons* obtained via ``get_embedding_service``
+and ``get_llm_service``.  Previously ``RAGService(db)`` implicitly constructed a
+fresh ``HybridRetriever()`` and ``LLMService()`` on every request, which rebuilt
+the Anthropic HTTP connection pool per call.  We now inject the shared singletons
+so nothing expensive is reconstructed on the hot path.
+"""
 
 import uuid
 from collections.abc import AsyncGenerator
@@ -8,6 +19,8 @@ from fastapi import Depends, Header
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.app.database.session import get_db_session
+from backend.app.rag.llm import get_llm_service
+from backend.app.rag.retriever import get_retriever
 from backend.app.services.auth_service import AuthService
 from backend.app.services.feedback_service import FeedbackService
 from backend.app.services.history_service import HistoryService
@@ -25,7 +38,8 @@ DbSession = Annotated[AsyncSession, Depends(get_session)]
 
 
 def get_rag_service(db: DbSession) -> RAGService:
-    return RAGService(db)
+    # Reuse the process-wide retriever + LLM singletons (built once at startup).
+    return RAGService(db, retriever=get_retriever(), llm_service=get_llm_service())
 
 
 def get_history_service(db: DbSession) -> HistoryService:

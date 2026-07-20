@@ -97,9 +97,17 @@ class Settings(BaseSettings):
         default="anthropic", alias="LLM_PROVIDER"
     )
 
+    # LLM runtime knobs (previously missing) — critical for stable builds.
+    # These are referenced by backend.app.rag.llm and must exist to avoid
+    # AttributeError during warm-up and per-request LLM client construction.
+    llm_max_tokens: int = Field(default=1024, alias="LLM_MAX_TOKENS")
+    llm_timeout: int = Field(default=30, alias="LLM_TIMEOUT")
+    llm_max_retries: int = Field(default=2, alias="LLM_MAX_RETRIES")
+
     # Anthropic
     anthropic_api_key: str = Field(default="", alias="ANTHROPIC_API_KEY")
-    anthropic_model: str = Field(default="claude-sonnet-4-5", alias="ANTHROPIC_MODEL")
+    # Use the faster Haiku variant by default to reduce latency for short help-desk answers.
+    anthropic_model: str = Field(default="claude-haiku-4-5", alias="ANTHROPIC_MODEL")
 
     # OpenAI (optional fallback)
     openai_api_key: str = Field(default="", alias="OPENAI_API_KEY")
@@ -113,9 +121,13 @@ class Settings(BaseSettings):
     # Embeddings
     # Provider options: "ollama" | "sentence-transformers"
     # ------------------------------------------------------------------
+    # Default to the sentence-transformers provider to match EMBEDDING_MODEL and
+    # to avoid an accidental mismatch between provider vs model used at build time.
     embedding_provider: Literal["ollama", "sentence-transformers"] = Field(
-        default="ollama", alias="EMBEDDING_PROVIDER"
+        default="sentence-transformers", alias="EMBEDDING_PROVIDER"
     )
+    # When using sentence-transformers this should be a HF model id. When using
+    # Ollama, the Ollama model name in OLLAMA_EMBEDDING_MODEL is used instead.
     embedding_model: str = Field(
         default="sentence-transformers/all-MiniLM-L6-v2", alias="EMBEDDING_MODEL"
     )
@@ -123,6 +135,24 @@ class Settings(BaseSettings):
     ollama_embedding_model: str = Field(
         default="nomic-embed-text", alias="OLLAMA_EMBEDDING_MODEL"
     )
+
+    # Computed helper: expected embedding dimensionality for the configured
+    # provider+model. Useful for runtime checks and operator logs.
+    @property
+    def embedding_dim(self) -> int | None:
+        """Return the expected embedding vector dimension for the active provider.
+
+        Returns None if the dimension is unknown for the configured model.
+        """
+        if self.embedding_provider == "ollama":
+            if self.ollama_embedding_model == "nomic-embed-text":
+                return 768
+            return None
+        if self.embedding_provider == "sentence-transformers":
+            if "all-MiniLM-L6-v2" in (self.embedding_model or ""):
+                return 384
+            return None
+        return None
 
     # ------------------------------------------------------------------
     # RAG pipeline
