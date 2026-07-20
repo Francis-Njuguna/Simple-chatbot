@@ -11,6 +11,15 @@ Client selection
 - **Persistent mode** — reads an on-disk store via ``chromadb.PersistentClient``
   at ``CHROMA_PERSIST_DIR``. Used for the pre-built vector store baked into the
   Docker image, or a mounted Railway volume. This is the default.
+
+Performance notes
+-----------------
+* Both the client *and* the collection handles are cached (``lru_cache``) so we
+  never re-open the on-disk store or re-issue ``get_or_create_collection`` on
+  the hot query path.
+* ``query_text_collection`` now optionally returns the stored embeddings
+  (``include_embeddings=True``) so callers can run MMR / reranking without
+  re-embedding candidate chunks over the network.
 """
 
 from functools import lru_cache
@@ -53,6 +62,7 @@ def get_chroma_client() -> chromadb.ClientAPI:
     return client
 
 
+@lru_cache
 def get_text_collection() -> Collection:
     client = get_chroma_client()
     return client.get_or_create_collection(
@@ -61,12 +71,19 @@ def get_text_collection() -> Collection:
     )
 
 
+@lru_cache
 def get_image_collection() -> Collection:
     client = get_chroma_client()
     return client.get_or_create_collection(
         name=IMAGE_COLLECTION,
         metadata={"hnsw:space": "cosine"},
     )
+
+
+def _reset_collection_cache() -> None:
+    """Drop cached collection handles (needed after delete/recreate)."""
+    get_text_collection.cache_clear()
+    get_image_collection.cache_clear()
 
 
 def upsert_text_chunks(
@@ -93,13 +110,17 @@ def query_text_collection(
     query_embedding: list[float],
     n_results: int = 10,
     where: dict[str, Any] | None = None,
+    include_embeddings: bool = False,
 ) -> dict[str, Any]:
     collection = get_text_collection()
+    include = ["documents", "metadatas", "distances"]
+    if include_embeddings:
+        include.append("embeddings")
     return collection.query(
         query_embeddings=[query_embedding],
         n_results=n_results,
         where=where,
-        include=["documents", "metadatas", "distances"],
+        include=include,
     )
 
 
@@ -124,5 +145,6 @@ def clear_collections() -> None:
             client.delete_collection(name)
         except ValueError:
             pass
+    _reset_collection_cache()
     get_text_collection()
     get_image_collection()
