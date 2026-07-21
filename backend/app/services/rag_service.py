@@ -8,8 +8,8 @@ Performance notes
 * Session lookup + history load run concurrently with retrieval where possible.
 * Every stage is timed via :class:`StageTimer` and a full breakdown is logged
   for each request so bottlenecks are visible in production logs.
-* ``chat`` remains a single blocking answer; ``chat_stream`` streams Claude's
-  tokens as they arrive for a far lower time-to-first-token.
+* ``chat`` remains a single blocking answer; ``chat_stream`` streams the
+  LLM's tokens as they arrive for a far lower time-to-first-token.
 """
 
 import uuid

@@ -49,8 +49,10 @@ services:
       LOG_FILE: /app/logs/app.log
 
       # --- LLM ---
-      LLM_PROVIDER: anthropic
-      ANTHROPIC_MODEL: claude-sonnet-4-5
+      LLM_PROVIDER: openai
+      OPENAI_MODEL: gpt-4o
+      # Optional: override to a Qwen-compatible OpenAI endpoint via .env
+      # OPENAI_API_BASE: ${OPENAI_API_BASE}
 
       # --- Embeddings (sentence-transformers — no Ollama needed) ---
       EMBEDDING_PROVIDER: sentence-transformers

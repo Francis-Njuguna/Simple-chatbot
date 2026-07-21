@@ -80,6 +80,22 @@ async def _warmup() -> None:
     try:
         await anyio.to_thread.run_sync(get_text_collection)
         logger.info("Warm-up: Chroma collection ready.")
+
+        # Best-effort embedding-dimension check: detect whether the stored
+        # vectors in Chroma match the configured embedding model dimension.
+        from backend.app.database.chroma import check_embedding_dimension
+
+        try:
+            dim_ok = await anyio.to_thread.run_sync(
+                check_embedding_dimension, settings.embedding_dim, True
+            )
+            if dim_ok is False:
+                logger.warning(
+                    "Warm-up: embedding-dimension check flagged a mismatch — see previous CRITICAL log for details."
+                )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("Warm-up: embedding-dimension check failed (%s)", exc)
+
     except Exception as exc:  # noqa: BLE001
         logger.warning("Warm-up: Chroma warm-up failed (%s)", exc)
 

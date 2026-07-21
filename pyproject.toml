@@ -19,12 +19,12 @@ dependencies = [
     "langchain-core>=0.3.0",
     "langchain-community>=0.3.14",
     "langchain-text-splitters>=0.3.4",
-    # LLM — Anthropic (primary)
-    "langchain-anthropic>=0.3.0",
-    "anthropic>=0.40.0",
-    # LLM — OpenAI (optional fallback, kept for flexibility)
+    # LLM — OpenAI-compatible (default)
     "langchain-openai>=0.2.14",
     "openai>=1.58.1",
+    # Optional Anthropic support
+    "langchain-anthropic>=0.3.0",
+    "anthropic>=0.40.0",
     # Embeddings — sentence-transformers (optional fallback for Ollama)
     "sentence-transformers>=3.3.1",
     # HTTP client (used by Ollama embedding backend)
