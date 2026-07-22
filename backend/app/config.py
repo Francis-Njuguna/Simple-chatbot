@@ -94,7 +94,7 @@ class Settings(BaseSettings):
     # Provider options: "openai" | "anthropic" | "ollama"
     # ------------------------------------------------------------------
     llm_provider: Literal["openai", "anthropic", "ollama"] = Field(
-        default="openai", alias="LLM_PROVIDER"
+        default="ollama", alias="LLM_PROVIDER"
     )
 
     # LLM runtime knobs (previously missing) — critical for stable builds.
@@ -120,7 +120,7 @@ class Settings(BaseSettings):
 
     # Ollama (local fallback)
     ollama_base_url: str = Field(default="http://localhost:11434", alias="OLLAMA_BASE_URL")
-    ollama_model: str = Field(default="llama3.2", alias="OLLAMA_MODEL")
+    ollama_model: str = Field(default="qwen3:4b", alias="OLLAMA_MODEL")
     ollama_timeout: int = Field(default=120, alias="OLLAMA_TIMEOUT")
     ollama_keep_alive: str | int | None = Field(default="-1", alias="OLLAMA_KEEP_ALIVE")
  

@@ -218,7 +218,7 @@ class LLMService:
         except Exception:
             logger.exception("LLM streaming failed")
             yield (
-                "I could not find that information in the Amref Help Desk knowledge base."
+                "I could not find that information in the Amref Help Desk knowledge base!."
             )
 
 

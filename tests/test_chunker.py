@@ -23,3 +23,6 @@ def test_chunk_article_empty_text() -> None:
     chunker = TextChunker()
     chunks = chunker.chunk_article("1", "Title", None, "http://x", "")
     assert chunks == []
+    print("These are the chunks {chunks}")
+
+    
