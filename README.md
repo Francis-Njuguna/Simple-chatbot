@@ -217,7 +217,7 @@ Key environment variables (see `.env.example`):
 | `OPENAI_API_BASE` | Base URL for OpenAI-compatible / Qwen endpoints | `https://<qwen-openai-compatible-endpoint>` |
 | `OPENAI_API_KEY` | Optional API key for local OpenAI-compatible endpoints | `` |
 | `OLLAMA_BASE_URL` | Local Ollama server URL | `http://localhost:11434` |
-| `OLLAMA_MODEL` | Ollama model name | `llama3.2` |
+| `OLLAMA_MODEL` | Ollama model name | `qwen3:4b` |
 | `EMBEDDING_MODEL` | Sentence transformer model | `all-MiniLM-L6-v2` |
 | `CHUNK_SIZE` | Text chunk size (chars) | `500` |
 | `TOP_K_RETRIEVAL` | Text chunks retrieved | `5` |
