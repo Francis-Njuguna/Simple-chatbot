@@ -23,7 +23,18 @@ _settings = get_settings()
 # the credentials/source that produced it.
 _settings.log_db_config()
 
-engine = create_async_engine(_settings.database_url, echo=_settings.debug, pool_pre_ping=True)
+# Tune the async engine pool sizing using configured settings.  Using a
+# small pool_size with a generous max_overflow lets the app handle spiky
+# concurrency without creating too many long-lived connections.
+engine = create_async_engine(
+    _settings.database_url,
+    echo=_settings.debug,
+    pool_pre_ping=True,
+    pool_size=_settings.db_pool_size,
+    max_overflow=_settings.db_max_overflow,
+    pool_timeout=_settings.db_pool_timeout,
+)
+
 async_session_factory = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
 
 

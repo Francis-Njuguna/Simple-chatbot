@@ -187,7 +187,7 @@ class HybridRetriever:
             cand_idx = mmr_indices[int(rank_pos)]
             chunk = candidates[cand_idx]
             # Drop exact-duplicate chunk bodies so we never spend prompt tokens
-            # (and Claude latency) on repeated context.
+            # (and higher LLM latency) on repeated context.
             dedup_key = chunk.text.strip()
             if dedup_key in seen_texts:
                 continue

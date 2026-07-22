@@ -90,11 +90,11 @@ class Settings(BaseSettings):
     chroma_persist_dir: str = Field(default="./data/chroma", alias="CHROMA_PERSIST_DIR")
 
     # ------------------------------------------------------------------
-    # LLM — Anthropic Claude (primary)
-    # Provider options: "anthropic" | "openai" | "ollama"
+    # LLM — OpenAI-compatible (primary)
+    # Provider options: "openai" | "anthropic" | "ollama"
     # ------------------------------------------------------------------
-    llm_provider: Literal["anthropic", "openai", "ollama"] = Field(
-        default="anthropic", alias="LLM_PROVIDER"
+    llm_provider: Literal["openai", "anthropic", "ollama"] = Field(
+        default="ollama", alias="LLM_PROVIDER"
     )
 
     # LLM runtime knobs (previously missing) — critical for stable builds.
@@ -104,19 +104,26 @@ class Settings(BaseSettings):
     llm_timeout: int = Field(default=30, alias="LLM_TIMEOUT")
     llm_max_retries: int = Field(default=2, alias="LLM_MAX_RETRIES")
 
-    # Anthropic
+    # OpenAI-compatible provider (default)
+    openai_api_key: str = Field(default="", alias="OPENAI_API_KEY")
+    openai_model: str = Field(default="gpt-4o", alias="OPENAI_MODEL")
+    # Optional API base for OpenAI-compatible endpoints (e.g. Qwen providers,
+    # local Ollama OpenAI-compatible servers). When set, the runtime will target
+    # this base URL instead of api.openai.com. If the local endpoint is unauthenticated,
+    # OPENAI_API_KEY may be omitted and a dummy key is used for compatibility.
+    openai_api_base: str | None = Field(default=None, alias="OPENAI_API_BASE")
+
+    # Anthropic (optional fallback)
     anthropic_api_key: str = Field(default="", alias="ANTHROPIC_API_KEY")
     # Use the faster Haiku variant by default to reduce latency for short help-desk answers.
     anthropic_model: str = Field(default="claude-haiku-4-5", alias="ANTHROPIC_MODEL")
 
-    # OpenAI (optional fallback)
-    openai_api_key: str = Field(default="", alias="OPENAI_API_KEY")
-    openai_model: str = Field(default="gpt-4o", alias="OPENAI_MODEL")
-
     # Ollama (local fallback)
     ollama_base_url: str = Field(default="http://localhost:11434", alias="OLLAMA_BASE_URL")
-    ollama_model: str = Field(default="llama3.2", alias="OLLAMA_MODEL")
-
+    ollama_model: str = Field(default="qwen3:4b", alias="OLLAMA_MODEL")
+    ollama_timeout: int = Field(default=120, alias="OLLAMA_TIMEOUT")
+    ollama_keep_alive: str | int | None = Field(default="-1", alias="OLLAMA_KEEP_ALIVE")
+ 
     # ------------------------------------------------------------------
     # Embeddings
     # Provider options: "ollama" | "sentence-transformers"
@@ -309,6 +316,15 @@ class Settings(BaseSettings):
             str(Path(self.log_file).parent),
         ]:
             Path(path).mkdir(parents=True, exist_ok=True)
+
+    # ------------------------------------------------------------------
+    # Database connection pool tuning (important for remote DBs like Railway)
+    # ------------------------------------------------------------------
+    # Adjust these for production to allow higher concurrency without serialising
+    # connections when the DB is in another region.
+    db_pool_size: int = Field(default=5, alias="DB_POOL_SIZE")
+    db_max_overflow: int = Field(default=10, alias="DB_MAX_OVERFLOW")
+    db_pool_timeout: int = Field(default=30, alias="DB_POOL_TIMEOUT")
 
     def log_db_config(self) -> None:
         """Emit a redacted summary of the active DB config to stdout.

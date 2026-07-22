@@ -11,7 +11,7 @@ Production-ready Retrieval-Augmented Generation (RAG) chatbot for **Amref Intern
 - Source citations with article title, URL, and confidence scores
 - Conversation memory with PostgreSQL session history
 - JWT authentication, rate limiting, feedback system, analytics logging
-- Configurable LLM: OpenAI (GPT-4o / GPT-4.1) or local Ollama models
+- Configurable LLM: OpenAI-compatible provider (Qwen / GPT-4o) or local Ollama models
 - Streamlit chat UI with dark mode, categories filter, and search history
 - Docker Compose deployment
 
@@ -64,7 +64,7 @@ backend/app/
 - Python 3.11+
 - [uv](https://docs.astral.sh/uv/) package manager
 - PostgreSQL 16+ (or use Docker Compose)
-- OpenAI API key (or Ollama for local inference)
+- OpenAI-compatible API key (Qwen/OpenAI) or Ollama for local inference
 
 ## Setup
 
@@ -73,8 +73,17 @@ backend/app/
 ```bash
 cd amref-helpdesk-rag
 cp .env.example .env
-# Edit .env with your OPENAI_API_KEY, database credentials, etc.
 ```
+
+If you are using a local Ollama-backed Qwen model, set the following in `.env` instead of the OpenAI-compatible provider fields:
+
+```bash
+LLM_PROVIDER=ollama
+OLLAMA_BASE_URL=http://localhost:11434
+OLLAMA_MODEL=<your-qwen-model-name>
+```
+
+For OpenAI-compatible Qwen endpoints, keep `LLM_PROVIDER=openai` and fill in `OPENAI_API_KEY`, `OPENAI_API_BASE`, and `OPENAI_MODEL`.
 
 ### 2. Install dependencies
 
@@ -140,7 +149,6 @@ Re-run ingestion to index local images.
 ```bash
 # Backend
 uv run uvicorn backend.app.main:app --reload --host 0.0.0.0 --port 8000
-
 # Frontend
 uv run streamlit run frontend/streamlit_app.py --server.port 8501
 ```
@@ -205,12 +213,19 @@ Key environment variables (see `.env.example`):
 | Variable | Description | Default |
 |----------|-------------|---------|
 | `LLM_PROVIDER` | `openai` or `ollama` | `openai` |
-| `OPENAI_MODEL` | OpenAI model name | `gpt-4o` |
-| `OLLAMA_MODEL` | Ollama model name | `llama3.2` |
+| `OPENAI_MODEL` | OpenAI or Qwen model name | `gpt-4o` |
+| `OPENAI_API_BASE` | Base URL for OpenAI-compatible / Qwen endpoints | `https://<qwen-openai-compatible-endpoint>` |
+| `OPENAI_API_KEY` | Optional API key for local OpenAI-compatible endpoints | `` |
+| `OLLAMA_BASE_URL` | Local Ollama server URL | `http://localhost:11434` |
+| `OLLAMA_MODEL` | Ollama model name | `qwen3:4b` |
 | `EMBEDDING_MODEL` | Sentence transformer model | `all-MiniLM-L6-v2` |
 | `CHUNK_SIZE` | Text chunk size (chars) | `500` |
 | `TOP_K_RETRIEVAL` | Text chunks retrieved | `5` |
 | `TOP_K_IMAGES` | Max images returned | `3` |
+
+### Local Qwen / OpenAI-compatible Ollama
+
+For local Qwen running on an Ollama server, keep `LLM_PROVIDER=openai`, set `OPENAI_API_BASE=http://localhost:11434`, and choose the local model name in `OPENAI_MODEL` (for example `qwen3:4b`). `OPENAI_API_KEY` can remain blank if the local server does not require authentication.
 
 ## Testing
 

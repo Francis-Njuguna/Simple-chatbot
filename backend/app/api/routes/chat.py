@@ -48,7 +48,7 @@ async def chat_stream(
       * ``done``  — final marker with the persisted ``message_id``.
 
     Streaming dramatically reduces perceived latency: the client renders the
-    first tokens in ~1–2s instead of waiting for Claude to finish the full
+    first tokens in ~1–2s instead of waiting for the LLM to finish the full
     answer.
     """
 

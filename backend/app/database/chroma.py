@@ -148,3 +148,78 @@ def clear_collections() -> None:
     _reset_collection_cache()
     get_text_collection()
     get_image_collection()
+
+
+def check_embedding_dimension(expected_dim: int | None, log_only: bool = True) -> bool | None:
+    """Inspect one stored embedding in the text collection and compare its length.
+
+    - expected_dim: the configured embedding_dim from Settings (or None if unknown)
+    - log_only: when False, raise RuntimeError on mismatch; when True, only log.
+
+    Returns:
+      - True  => detected and matches expected_dim
+      - False => detected and DOES NOT match expected_dim
+      - None  => could not determine (no embeddings or inspection failed)
+
+    This is a best-effort check: Chroma collection APIs vary across versions, so
+    this helper attempts a couple of common ways to read stored embeddings and
+    falls back gracefully if unsupported.
+    """
+    collection = get_text_collection()
+
+    try:
+        # Preferred: read a small sample without running a query.
+        try:
+            # Many chroma versions support collection.get(include=["embeddings"], limit=1)
+            sample = collection.get(include=["embeddings"], limit=1)
+        except TypeError:
+            # Some clients omit 'limit' — try without it.
+            sample = collection.get(include=["embeddings"])
+    except Exception:
+        # Fallback: use a cheap query to return one item with embeddings.
+        try:
+            sample = collection.query(query_embeddings=[[0.0]], n_results=1, include=["embeddings"])  # type: ignore[arg-type]
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("Chroma embedding-dim check failed to read sample embedding: %s", exc)
+            return None
+
+    # Normalize the returned shape to a list-of-lists pattern used elsewhere.
+    embeddings = sample.get("embeddings", [[]]) if isinstance(sample, dict) else None
+    if embeddings is None:
+        logger.warning("Chroma embedding-dim check: collection returned unexpected payload.")
+        return None
+
+    # embeddings may be [[...]] or []
+    try:
+        first = embeddings[0]
+    except Exception:
+        logger.warning("Chroma embedding-dim check: no embeddings found in collection sample.")
+        return None
+
+    if not isinstance(first, list):
+        # Sometimes embeddings may be returned as numpy arrays or other types — coerce if possible
+        try:
+            first = list(first)
+        except Exception:
+            logger.warning("Chroma embedding-dim check: could not coerce sample embedding to list.")
+            return None
+
+    actual_dim = len(first)
+    if expected_dim is None:
+        logger.info("Chroma embedding-dim detected: %d (no expected dim configured)", actual_dim)
+        return None
+
+    if actual_dim != expected_dim:
+        msg = (
+            f"CRITICAL: Chroma embedding dimension mismatch — store={actual_dim} vs "
+            f"configured={expected_dim}. This likely means the vector DB was built with a "
+            "different embedding model. Set EMBEDDING_PROVIDER/EMBEDDING_MODEL to match "
+            "the stored vectors, or re-ingest the vector store with the desired model."
+        )
+        if log_only:
+            logger.critical(msg)
+            return False
+        raise RuntimeError(msg)
+
+    logger.info("Chroma embedding dimension OK — %d", actual_dim)
+    return True
