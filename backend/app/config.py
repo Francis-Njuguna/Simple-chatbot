@@ -90,11 +90,11 @@ class Settings(BaseSettings):
     chroma_persist_dir: str = Field(default="./data/chroma", alias="CHROMA_PERSIST_DIR")
 
     # ------------------------------------------------------------------
-    # LLM — OpenAI-compatible (primary)
-    # Provider options: "openai" | "anthropic" | "ollama"
+    # LLM — OpenAI-compatible (primary), Gemini, Anthropic, or Ollama
+    # Provider options: "openai" | "gemini" | "anthropic" | "ollama"
     # ------------------------------------------------------------------
-    llm_provider: Literal["openai", "anthropic", "ollama"] = Field(
-        default="ollama", alias="LLM_PROVIDER"
+    llm_provider: Literal["openai", "gemini", "anthropic", "ollama"] = Field(
+        default="gemini", alias="LLM_PROVIDER"
     )
 
     # LLM runtime knobs (previously missing) — critical for stable builds.
@@ -118,11 +118,15 @@ class Settings(BaseSettings):
     # Use the faster Haiku variant by default to reduce latency for short help-desk answers.
     anthropic_model: str = Field(default="claude-haiku-4-5", alias="ANTHROPIC_MODEL")
 
+    # Google Gemini (optional)
+    gemini_api_key: str = Field(default="", alias="GEMINI_API_KEY")
+    gemini_model: str = Field(default="gemini-2.0-flash", alias="GEMINI_MODEL")
+
     # Ollama (local fallback)
-    ollama_base_url: str = Field(default="http://localhost:11434", alias="OLLAMA_BASE_URL")
-    ollama_model: str = Field(default="qwen3:4b", alias="OLLAMA_MODEL")
-    ollama_timeout: int = Field(default=120, alias="OLLAMA_TIMEOUT")
-    ollama_keep_alive: str | int | None = Field(default="-1", alias="OLLAMA_KEEP_ALIVE")
+    #ollama_base_url: str = Field(default="http://localhost:11434", alias="OLLAMA_BASE_URL")
+    #ollama_model: str = Field(default="qwen3:4b", alias="OLLAMA_MODEL")
+    #ollama_timeout: int = Field(default=120, alias="OLLAMA_TIMEOUT")
+    #ollama_keep_alive: str | int | None = Field(default="-1", alias="OLLAMA_KEEP_ALIVE")
  
     # ------------------------------------------------------------------
     # Embeddings

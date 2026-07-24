@@ -9,6 +9,7 @@ Performance notes
   spend time generating far more tokens than a help-desk answer needs.
 """
 
+
 from functools import lru_cache
 from typing import Any
 
@@ -26,6 +27,7 @@ class LLMService:
 
     Provider priority (set via LLM_PROVIDER env var):
         openai     → Qwen/OpenAI (default)
+        gemini     → Google Gemini (fast & capable)
         anthropic  → haiku-4-5 / Sonnet  (optional fallback)
         ollama     → local Llama / Mistral etc.  (offline fallback)
     """
@@ -38,9 +40,26 @@ class LLMService:
         provider = self.settings.llm_provider
         max_tokens = self.settings.llm_max_tokens
  
+        if provider == "gemini":
+            from langchain_google_genai import ChatGoogleGenerativeAI  # lazy import
+
+            if not self.settings.gemini_api_key:
+                raise RuntimeError(
+                    "GEMINI_API_KEY is not set. Set a valid Google Gemini API key."
+                )
+
+            logger.info("Using Google Gemini model: %s", self.settings.gemini_model)
+            return ChatGoogleGenerativeAI(
+                model=self.settings.gemini_model,
+                api_key=self.settings.gemini_api_key,
+                temperature=0.0,
+                max_output_tokens=max_tokens,
+                timeout=self.settings.llm_timeout,
+            )
+
         if provider == "anthropic":
             from langchain_anthropic import ChatAnthropic  # lazy import
- 
+  
             logger.info("Using Anthropic model: %s", self.settings.anthropic_model)
             return ChatAnthropic(
                 model=self.settings.anthropic_model,
@@ -157,7 +176,7 @@ class LLMService:
         )
  
     def _use_chat_model(self) -> bool:
-        return self.settings.llm_provider in {"openai", "anthropic"}
+        return self.settings.llm_provider in {"openai", "gemini", "anthropic"}
  
     @staticmethod
     def _extract_text(content: Any) -> str:
