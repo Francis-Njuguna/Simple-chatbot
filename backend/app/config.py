@@ -23,7 +23,7 @@ from pathlib import Path
 from typing import Literal, Optional
 from urllib.parse import urlsplit
 
-from pydantic import Field, computed_field
+from pydantic import AliasChoices, Field, computed_field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -115,6 +115,19 @@ class Settings(BaseSettings):
 
     # Anthropic (optional fallback)
     anthropic_api_key: str = Field(default="", alias="ANTHROPIC_API_KEY")
+    # Credential actually used by the Anthropic client. ANTHROPIC_AUTH_KEY is the
+    # preferred name (it is what gateways/proxies issue); ANTHROPIC_API_KEY is
+    # accepted as a fallback so existing deployments keep working.
+    anthropic_auth_key: str = Field(
+        default="",
+        validation_alias=AliasChoices("ANTHROPIC_AUTH_KEY", "ANTHROPIC_API_KEY"),
+    )
+    # Optional base URL for an Anthropic-compatible gateway/proxy. When unset the
+    # SDK default (api.anthropic.com) is used. Both names are accepted.
+    anthropic_base_url: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("ANTHROPIC_BASE_URL", "AUTH_BASE_URL"),
+    )
     # Use the faster Haiku variant by default to reduce latency for short help-desk answers.
     anthropic_model: str = Field(default="claude-haiku-4-5", alias="ANTHROPIC_MODEL")
 
