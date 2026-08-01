@@ -1,5 +1,6 @@
 """CLI script to run knowledge base ingestion."""
 
+import argparse
 import asyncio
 import os
 import ssl
@@ -40,17 +41,28 @@ def _print_tls_diagnostics() -> None:
     print("=================================")
 
 
-async def main() -> None:
+async def main(force: bool, include_images: bool) -> None:
     setup_logging()
     _print_tls_diagnostics()
     await init_db()
     async with async_session_factory() as session:
         pipeline = IngestionPipeline(session, EmbeddingService())
-        result = await pipeline.run(force=False, include_images=True)
+        result = await pipeline.run(force=force, include_images=include_images)
         await session.commit()
         print(result)
 
 
-
 if __name__ == "__main__":
-    asyncio.run(main())
+    parser = argparse.ArgumentParser(description="Crawl and ingest the Amref help desk KB.")
+    parser.add_argument(
+        "--force",
+        action="store_true",
+        help="Drop the ChromaDB knowledge collection first, for a clean full re-ingest.",
+    )
+    parser.add_argument(
+        "--no-images",
+        action="store_true",
+        help="Skip image download and embedding.",
+    )
+    args = parser.parse_args()
+    asyncio.run(main(force=args.force, include_images=not args.no_images))

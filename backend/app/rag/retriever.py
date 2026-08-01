@@ -1,5 +1,19 @@
 """Hybrid retrieval with MMR and reranking.
 
+Metadata split
+--------------
+Retrieval reads only what Chroma carries (ids, ``category``, ``chunk_index``)
+and returns chunks/images whose display fields are blank. ``hydrate_chunks`` /
+``hydrate_images`` then fill title, url, summary, caption and paths from
+**PostgreSQL**, which is the source of truth. Filtering, MMR and reranking all
+happen before that, inside Chroma / NumPy, so hydration touches only the handful
+of records that survived.
+
+For a vector whose Postgres row is missing (partial re-ingest, or a store
+written before the metadata split), hydration falls back to whatever the Chroma
+record still carries — retrieval degrades to the old behaviour rather than
+returning blank citations.
+
 Performance notes
 -----------------
 * The query is embedded **once per request** and the resulting vector is shared
@@ -11,21 +25,30 @@ Performance notes
   loop calling ``similarity`` repeatedly.
 * Synchronous ChromaDB calls are off-loaded to a worker thread so they don't
   block the FastAPI event loop.
+* Hydration is a single ``IN (...)`` query per kind, behind a TTL cache.
 * ``get_retriever`` returns a process-wide singleton so the retriever (and its
   embedding backend) is built once, not per request.
 """
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from functools import lru_cache
 from typing import Any, Optional
 
 import anyio
 import numpy as np
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.app.config import get_settings
 from backend.app.database.chroma import query_image_collection, query_text_collection
-from backend.app.prompts.templates import CONTEXT_CHUNK_TEMPLATE
+from backend.app.prompts.templates import (
+    CONTEXT_CHUNK_TEMPLATE,
+    EMPTY_CONTEXT_NOTE,
+    IMAGE_CHUNK_TEMPLATE,
+    IMAGE_CONTEXT_NOTE,
+    NO_IMAGES_NOTE,
+)
 from backend.app.rag.embeddings import EmbeddingService, get_embedding_service
+from backend.app.services import metadata_service
 from backend.app.utils.logging import get_logger
 
 logger = get_logger(__name__)
@@ -36,24 +59,31 @@ class RetrievedChunk:
     chunk_id: str
     text: str
     article_id: str
-    title: str
-    url: str
     category: Optional[str]
     chunk_index: int
     score: float
+    # Hydrated from PostgreSQL after retrieval (see ``hydrate_chunks``).
+    title: str = ""
+    url: str = ""
+    summary: Optional[str] = None
+    # Raw Chroma metadata, kept only as a fallback when the Postgres row is
+    # missing. Not used once hydration succeeds.
+    _raw_meta: dict[str, Any] = field(default_factory=dict, repr=False)
 
 
 @dataclass
 class RetrievedImage:
     image_id: str
-    filename: str
-    filepath: str
-    static_path: str
-    caption: Optional[str]
-    alt_text: Optional[str]
     article_id: Optional[str]
     category: Optional[str]
     score: float
+    # Hydrated from PostgreSQL after retrieval (see ``hydrate_images``).
+    filename: str = ""
+    filepath: str = ""
+    static_path: str = ""
+    caption: Optional[str] = None
+    alt_text: Optional[str] = None
+    _raw_meta: dict[str, Any] = field(default_factory=dict, repr=False)
 
 
 class HybridRetriever:
@@ -156,11 +186,10 @@ class HybridRetriever:
                     chunk_id=chunk_id,
                     text=texts[i],
                     article_id=meta.get("article_id", ""),
-                    title=meta.get("title", ""),
-                    url=meta.get("url", ""),
                     category=meta.get("category"),
                     chunk_index=int(meta.get("chunk_index", 0)),
                     score=self._distance_to_score(distances[i]),
+                    _raw_meta=meta,
                 )
             )
 
@@ -234,14 +263,10 @@ class HybridRetriever:
             images.append(
                 RetrievedImage(
                     image_id=image_id,
-                    filename=meta.get("filename", ""),
-                    filepath=meta.get("filepath", ""),
-                    static_path=meta.get("static_path", ""),
-                    caption=meta.get("caption"),
-                    alt_text=meta.get("alt_text"),
                     article_id=meta.get("article_id") or None,
                     category=meta.get("category") or None,
                     score=score,
+                    _raw_meta=meta,
                 )
             )
 
@@ -253,8 +278,14 @@ class HybridRetriever:
         query: str,
         category: Optional[str] = None,
         query_embedding: Optional[list[float]] = None,
+        db: Optional[AsyncSession] = None,
     ) -> tuple[list[RetrievedChunk], list[RetrievedImage]]:
-        """Embed the query ONCE and run text + image retrieval concurrently."""
+        """Embed the query ONCE and run text + image retrieval concurrently.
+
+        When ``db`` is supplied the survivors are hydrated from PostgreSQL
+        before returning; without it the caller gets id-only records and can
+        hydrate later (or not at all, e.g. in tests).
+        """
         if query_embedding is None:
             query_embedding = await self.embedding_service.embed_query_async(query)
 
@@ -277,20 +308,111 @@ class HybridRetriever:
             tg.start_soon(_text)
             tg.start_soon(_images)
 
+        if db is not None:
+            # Both hydrations are independent single-table reads, but they share
+            # one AsyncSession — SQLAlchemy sessions are not concurrency-safe, so
+            # these must run sequentially, not in a task group.
+            await self.hydrate_chunks(db, chunks)
+            await self.hydrate_images(db, images)
+
         return chunks, images
+
+    # ------------------------------------------------------------------
+    # PostgreSQL hydration — display metadata, source of truth
+    # ------------------------------------------------------------------
+
+    async def hydrate_chunks(self, db: AsyncSession, chunks: list[RetrievedChunk]) -> None:
+        """Fill title/url/category/summary on ``chunks`` from PostgreSQL."""
+        if not chunks:
+            return
+
+        articles = await metadata_service.get_articles(db, (c.article_id for c in chunks))
+
+        for chunk in chunks:
+            meta = articles.get(chunk.article_id)
+            if meta is not None:
+                chunk.title = meta.title
+                chunk.url = meta.url
+                chunk.summary = meta.summary
+                # Chroma's category drives filtering; Postgres owns the value.
+                chunk.category = meta.category or chunk.category
+            else:
+                # No Postgres row — fall back to whatever the vector carries so
+                # a pre-migration store still yields usable citations.
+                raw = chunk._raw_meta
+                chunk.title = raw.get("title", "") or chunk.title
+                chunk.url = raw.get("url", "") or chunk.url
+
+    async def hydrate_images(self, db: AsyncSession, images: list[RetrievedImage]) -> None:
+        """Fill filename/paths/caption on ``images`` from PostgreSQL."""
+        if not images:
+            return
+
+        records = await metadata_service.get_images(db, (i.image_id for i in images))
+
+        for image in images:
+            meta = records.get(image.image_id)
+            if meta is not None:
+                image.filename = meta.filename
+                image.filepath = meta.filepath
+                image.static_path = meta.static_path or f"/static/images/{meta.filename}"
+                image.caption = meta.caption
+                image.alt_text = meta.alt_text
+                image.article_id = meta.article_id or image.article_id
+                image.category = meta.category or image.category
+            else:
+                raw = image._raw_meta
+                image.filename = raw.get("filename", "") or image.filename
+                image.filepath = raw.get("filepath", "") or image.filepath
+                image.static_path = raw.get("static_path", "") or image.static_path
+                image.caption = raw.get("caption") or image.caption
+                image.alt_text = raw.get("alt_text") or image.alt_text
 
     def format_context(self, chunks: list[RetrievedChunk]) -> str:
         if not chunks:
-            return "No relevant context found."
-        return "\n".join(
-            CONTEXT_CHUNK_TEMPLATE.format(
-                title=c.title,
-                category=c.category or "General",
-                url=c.url,
-                text=c.text,
+            return EMPTY_CONTEXT_NOTE
+
+        # One article contributes several chunks; its summary is emitted once,
+        # as framing above the excerpts, rather than repeated per chunk.
+        summaries_emitted: set[str] = set()
+        blocks: list[str] = []
+        for chunk in chunks:
+            summary = ""
+            if chunk.summary and chunk.article_id not in summaries_emitted:
+                summaries_emitted.add(chunk.article_id)
+                summary = f"Article overview: {chunk.summary}\n"
+            blocks.append(
+                CONTEXT_CHUNK_TEMPLATE.format(
+                    title=chunk.title or "Untitled article",
+                    category=chunk.category or "General",
+                    url=chunk.url,
+                    summary=summary,
+                    text=chunk.text,
+                )
             )
-            for c in chunks
-        )
+        return "\n".join(blocks)
+
+    def format_images(self, images: list[RetrievedImage]) -> str:
+        """Describe the images the client will render, for the LLM prompt.
+
+        The model never sees pixels — only captions — so it can point at a
+        screenshot ("see the image below") without inventing one.
+        """
+        if not images:
+            return NO_IMAGES_NOTE
+
+        lines: list[str] = []
+        for img in images:
+            caption = (img.caption or img.alt_text or "").strip()
+            # Ingest falls back to "Image from article N" when a page ships no
+            # caption or alt text; that carries no meaning for the model, so
+            # skip it rather than feed it a filler description to quote.
+            if not caption or caption.lower().startswith("image from article"):
+                caption = f"Screenshot from {img.category or 'the knowledge base'}"
+            source = f" (from article {img.article_id})" if img.article_id else ""
+            lines.append(IMAGE_CHUNK_TEMPLATE.format(caption=caption, source=source))
+
+        return "\n".join([IMAGE_CONTEXT_NOTE, "", *lines])
 
     def compute_confidence(self, chunks: list[RetrievedChunk]) -> float:
         if not chunks:

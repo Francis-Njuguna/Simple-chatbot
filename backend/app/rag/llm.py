@@ -16,7 +16,7 @@ from typing import Any
 from langchain_core.messages import HumanMessage, SystemMessage
 
 from backend.app.config import get_settings
-from backend.app.prompts.templates import SYSTEM_PROMPT, USER_PROMPT_TEMPLATE
+from backend.app.prompts.templates import NO_IMAGES_NOTE, SYSTEM_PROMPT, USER_PROMPT_TEMPLATE
 from backend.app.utils.logging import get_logger
 
 logger = get_logger(__name__)
@@ -172,10 +172,11 @@ class LLMService:
         )
 
     def _build_messages(
-        self, question: str, context: str, history: str
+        self, question: str, context: str, history: str, images: str
     ) -> list[Any]:
         user_prompt = USER_PROMPT_TEMPLATE.format(
             context=context,
+            images=images,
             history=history,
             question=question,
         )
@@ -183,11 +184,12 @@ class LLMService:
             SystemMessage(content=SYSTEM_PROMPT),
             HumanMessage(content=user_prompt),
         ]
- 
-    def _build_prompt(self, question: str, context: str, history: str) -> str:
+
+    def _build_prompt(self, question: str, context: str, history: str, images: str) -> str:
         return "\n\n".join(
             [SYSTEM_PROMPT, USER_PROMPT_TEMPLATE.format(
                 context=context,
+                images=images,
                 history=history,
                 question=question,
             )]
@@ -254,30 +256,46 @@ class LLMService:
         question: str,
         context: str,
         history: str = "No prior conversation.",
+        images: str = NO_IMAGES_NOTE,
     ) -> str:
         if self._use_chat_model():
-            prompt = self._build_messages(question, context, history)
+            prompt = self._build_messages(question, context, history, images)
         else:
-            prompt = self._build_prompt(question, context, history)
- 
+            prompt = self._build_prompt(question, context, history, images)
+
         try:
             response = await self._llm.ainvoke(prompt)
             return self._extract_text(response)
         except Exception as exc:
             logger.exception("LLM generation failed")
             return self._error_message(exc)
- 
+
+    async def complete(self, system: str, user: str) -> str:
+        """Run a one-off prompt with no chat scaffolding.
+
+        Unlike :meth:`generate_answer`, exceptions propagate — background jobs
+        need to distinguish a failed call from a successful empty answer, and
+        must not persist an error string as if it were content.
+        """
+        if self._use_chat_model():
+            prompt: Any = [SystemMessage(content=system), HumanMessage(content=user)]
+        else:
+            prompt = f"{system}\n\n{user}"
+        response = await self._llm.ainvoke(prompt)
+        return self._extract_text(response)
+
     async def stream_answer(
         self,
         question: str,
         context: str,
         history: str = "No prior conversation.",
+        images: str = NO_IMAGES_NOTE,
     ):
         """Yield answer chunks as they arrive (for streaming responses)."""
         if self._use_chat_model():
-            prompt = self._build_messages(question, context, history)
+            prompt = self._build_messages(question, context, history, images)
         else:
-            prompt = self._build_prompt(question, context, history)
+            prompt = self._build_prompt(question, context, history, images)
  
         try:
             async for chunk in self._llm.astream(prompt):

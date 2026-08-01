@@ -89,10 +89,28 @@ class DocumentMetadata(Base):
     url: Mapped[str] = mapped_column(String(1000))
     chunk_count: Mapped[int] = mapped_column(Integer, default=0)
     raw_content: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    # Extractive summary computed during ingestion — no LLM call, so ingestion
+    # stays fast and works offline. Used as article-level framing in the RAG
+    # prompt so the model can synthesise a real answer.
+    summary: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    # Optional abstractive summary from the background enrichment pass
+    # (see services/enrichment_service.py). Never required for ingestion.
+    llm_summary: Mapped[str | None] = mapped_column(Text, nullable=True)
+    llm_summary_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+
     ingested_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=_utcnow, onupdate=_utcnow
     )
+
+    @property
+    def best_summary(self) -> str | None:
+        """Prefer the richer LLM summary when enrichment has run."""
+        return self.llm_summary or self.summary
 
 
 class ImageMetadata(Base):
@@ -102,6 +120,9 @@ class ImageMetadata(Base):
     image_id: Mapped[str] = mapped_column(String(100), unique=True, index=True)
     filename: Mapped[str] = mapped_column(String(500))
     filepath: Mapped[str] = mapped_column(String(1000))
+    # Browser-servable path (mounted at /static/images). Previously only lived
+    # in Chroma metadata; Postgres is now the source of truth for it.
+    static_path: Mapped[str | None] = mapped_column(String(1000), nullable=True)
     caption: Mapped[str | None] = mapped_column(Text, nullable=True)
     alt_text: Mapped[str | None] = mapped_column(Text, nullable=True)
     article_id: Mapped[str | None] = mapped_column(String(50), nullable=True, index=True)
