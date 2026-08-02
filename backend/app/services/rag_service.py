@@ -97,7 +97,7 @@ class RAGService:
         session_id: Optional[str],
         category: Optional[str],
         timer: StageTimer,
-    ) -> tuple[Session, str, list[RetrievedChunk], list[RetrievedImage], str, float]:
+    ) -> tuple[Session, str, list[RetrievedChunk], list[RetrievedImage], str, str, float]:
         async with timer.astage("session_history"):
             session = await self._get_or_create_session(session_id, message)
             history = await self._get_history_text(session.id)
@@ -111,15 +111,21 @@ class RAGService:
             query_embedding = await self.retriever.embed_query(message)
 
         async with timer.astage("retrieval"):
+            # `db` is what lets the retriever hydrate title/url/summary/caption
+            # from PostgreSQL — Chroma only carries ids and filter keys now.
             chunks, images = await self.retriever.retrieve(
-                message, category=category, query_embedding=query_embedding
+                message,
+                category=category,
+                query_embedding=query_embedding,
+                db=self.db,
             )
 
         with timer.stage("context_build"):
             context = self.retriever.format_context(chunks)
+            image_context = self.retriever.format_images(images)
             confidence = self.retriever.compute_confidence(chunks)
 
-        return session, history, chunks, images, context, confidence
+        return session, history, chunks, images, context, image_context, confidence
 
     @staticmethod
     def _build_sources(chunks: list[RetrievedChunk]) -> list[SourceCitation]:
@@ -165,6 +171,7 @@ class RAGService:
             chunks,
             images,
             context,
+            image_context,
             confidence,
         ) = await self._prepare(message, session_id, category, timer)
 
@@ -173,6 +180,7 @@ class RAGService:
                 question=message,
                 context=context,
                 history=history,
+                images=image_context,
             )
 
         with timer.stage("persist"):
@@ -231,6 +239,7 @@ class RAGService:
             chunks,
             images,
             context,
+            image_context,
             confidence,
         ) = await self._prepare(message, session_id, category, timer)
 
@@ -251,7 +260,7 @@ class RAGService:
         started = anyio.current_time()
         first_token_ms: Optional[float] = None
         async for token in self.llm_service.stream_answer(
-            question=message, context=context, history=history
+            question=message, context=context, history=history, images=image_context
         ):
             if first_token_ms is None:
                 first_token_ms = (anyio.current_time() - started) * 1000.0

@@ -1,5 +1,26 @@
 """ChromaDB client and collection management.
 
+Collection layout
+-----------------
+A **single** collection (``amref_knowledge``) holds both text chunks and image
+embeddings, discriminated by the ``source_type`` metadata field (``"text"`` or
+``"image"``). One collection means one HNSW index to warm, one place to filter,
+and image vectors that live in the same space as text vectors — an image is
+embedded from its caption / alt text / nearby context, so a text query matches
+it directly.
+
+Metadata policy
+---------------
+PostgreSQL is the source of truth for metadata. Chroma stores only what is
+needed to *retrieve* without a database round-trip:
+
+    text  → source_type, article_id, chunk_id, chunk_index, category
+    image → source_type, image_id, article_id, category
+
+Everything else (title, url, caption, filename, static_path, keywords…) is
+fetched from Postgres by ``article_id`` / ``image_id`` after retrieval. Do not
+add display-only fields back here.
+
 Client selection
 ----------------
 ``get_chroma_client()`` picks the backend based on config (see Settings):
@@ -14,15 +35,15 @@ Client selection
 
 Performance notes
 -----------------
-* Both the client *and* the collection handles are cached (``lru_cache``) so we
-  never re-open the on-disk store or re-issue ``get_or_create_collection`` on
-  the hot query path.
-* ``query_text_collection`` now optionally returns the stored embeddings
-  (``include_embeddings=True``) so callers can run MMR / reranking without
-  re-embedding candidate chunks over the network.
+* Both the client *and* the collection handles are cached (behind a lock, since
+  retrieval touches Chroma from worker threads) so we never re-open the on-disk
+  store or re-issue ``get_or_create_collection`` on the hot query path.
+* ``query_text_collection`` / ``query_image_collection`` optionally return the
+  stored embeddings (``include_embeddings=True``) so callers can run MMR /
+  reranking without re-embedding candidate chunks over the network.
 """
 
-from functools import lru_cache
+import threading
 from typing import Any
 
 import chromadb
@@ -33,12 +54,34 @@ from backend.app.utils.logging import get_logger
 
 logger = get_logger(__name__)
 
-TEXT_COLLECTION = "amref_text_chunks"
-IMAGE_COLLECTION = "amref_image_embeddings"
+# Single unified collection for text + image vectors.
+KNOWLEDGE_COLLECTION = "amref_knowledge"
+
+# Discriminator values for the ``source_type`` metadata field.
+SOURCE_TYPE_TEXT = "text"
+SOURCE_TYPE_IMAGE = "image"
+
+# Legacy collection names, kept so migration/inspection tooling can find and
+# drain a pre-split store. Nothing on the query path reads these.
+LEGACY_TEXT_COLLECTION = "amref_text_chunks"
+LEGACY_IMAGE_COLLECTION = "amref_image_embeddings"
+
+# Backwards-compatible aliases — older callers/scripts imported these names.
+TEXT_COLLECTION = KNOWLEDGE_COLLECTION
+IMAGE_COLLECTION = KNOWLEDGE_COLLECTION
+
+# Retrieval fans text and image lookups into worker threads (see rag/retriever.py),
+# so both the client and the collection handles can be requested concurrently.
+# ``lru_cache`` does not serialise misses, which let two threads both enter
+# ``PersistentClient()`` and corrupt Chroma's internal path registry
+# (``KeyError: './data/chroma'``). A reentrant lock makes first-use atomic; after
+# warmup every call hits the cached value and the lock is uncontended.
+_init_lock = threading.RLock()
+_client: chromadb.ClientAPI | None = None
+_collections: dict[str, Collection] = {}
 
 
-@lru_cache
-def get_chroma_client() -> chromadb.ClientAPI:
+def _build_client() -> chromadb.ClientAPI:
     settings = get_settings()
 
     if settings.use_chroma_http:
@@ -62,28 +105,56 @@ def get_chroma_client() -> chromadb.ClientAPI:
     return client
 
 
-@lru_cache
+def get_chroma_client() -> chromadb.ClientAPI:
+    global _client
+    if _client is None:
+        with _init_lock:
+            if _client is None:
+                _client = _build_client()
+    return _client
+
+
+def _get_collection(name: str) -> Collection:
+    collection = _collections.get(name)
+    if collection is None:
+        with _init_lock:
+            collection = _collections.get(name)
+            if collection is None:
+                collection = get_chroma_client().get_or_create_collection(
+                    name=name,
+                    metadata={"hnsw:space": "cosine"},
+                )
+                _collections[name] = collection
+    return collection
+
+
+def get_knowledge_collection() -> Collection:
+    """The one collection holding both text and image vectors."""
+    return _get_collection(KNOWLEDGE_COLLECTION)
+
+
+# Backwards-compatible accessors — both now return the unified collection.
 def get_text_collection() -> Collection:
-    client = get_chroma_client()
-    return client.get_or_create_collection(
-        name=TEXT_COLLECTION,
-        metadata={"hnsw:space": "cosine"},
-    )
+    return get_knowledge_collection()
 
 
-@lru_cache
 def get_image_collection() -> Collection:
-    client = get_chroma_client()
-    return client.get_or_create_collection(
-        name=IMAGE_COLLECTION,
-        metadata={"hnsw:space": "cosine"},
-    )
+    return get_knowledge_collection()
 
 
 def _reset_collection_cache() -> None:
     """Drop cached collection handles (needed after delete/recreate)."""
-    get_text_collection.cache_clear()
-    get_image_collection.cache_clear()
+    with _init_lock:
+        _collections.clear()
+
+
+def _with_source_type(metadatas: list[dict[str, Any]], source_type: str) -> list[dict[str, Any]]:
+    """Stamp every metadata dict with its discriminator.
+
+    Applied at the single write choke-point so no upsert path can forget it —
+    an unstamped record would be invisible to every filtered query.
+    """
+    return [{**meta, "source_type": source_type} for meta in metadatas]
 
 
 def upsert_text_chunks(
@@ -92,8 +163,13 @@ def upsert_text_chunks(
     documents: list[str],
     metadatas: list[dict[str, Any]],
 ) -> None:
-    collection = get_text_collection()
-    collection.upsert(ids=ids, embeddings=embeddings, documents=documents, metadatas=metadatas)
+    collection = get_knowledge_collection()
+    collection.upsert(
+        ids=ids,
+        embeddings=embeddings,
+        documents=documents,
+        metadatas=_with_source_type(metadatas, SOURCE_TYPE_TEXT),
+    )
 
 
 def upsert_image_embeddings(
@@ -102,8 +178,26 @@ def upsert_image_embeddings(
     documents: list[str],
     metadatas: list[dict[str, Any]],
 ) -> None:
-    collection = get_image_collection()
-    collection.upsert(ids=ids, embeddings=embeddings, documents=documents, metadatas=metadatas)
+    collection = get_knowledge_collection()
+    collection.upsert(
+        ids=ids,
+        embeddings=embeddings,
+        documents=documents,
+        metadatas=_with_source_type(metadatas, SOURCE_TYPE_IMAGE),
+    )
+
+
+def _build_where(source_type: str, where: dict[str, Any] | None) -> dict[str, Any]:
+    """Combine the source_type discriminator with an optional caller filter.
+
+    Chroma requires an explicit ``$and`` when more than one field is
+    constrained; a flat two-key dict is not a valid filter expression.
+    """
+    base = {"source_type": source_type}
+    if not where:
+        return base
+    clauses = [base] + [{key: value} for key, value in where.items()]
+    return {"$and": clauses}
 
 
 def query_text_collection(
@@ -112,14 +206,14 @@ def query_text_collection(
     where: dict[str, Any] | None = None,
     include_embeddings: bool = False,
 ) -> dict[str, Any]:
-    collection = get_text_collection()
+    collection = get_knowledge_collection()
     include = ["documents", "metadatas", "distances"]
     if include_embeddings:
         include.append("embeddings")
     return collection.query(
         query_embeddings=[query_embedding],
         n_results=n_results,
-        where=where,
+        where=_build_where(SOURCE_TYPE_TEXT, where),
         include=include,
     )
 
@@ -129,29 +223,43 @@ def query_image_collection(
     n_results: int = 5,
     where: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    collection = get_image_collection()
+    collection = get_knowledge_collection()
     return collection.query(
         query_embeddings=[query_embedding],
         n_results=n_results,
-        where=where,
+        where=_build_where(SOURCE_TYPE_IMAGE, where),
         include=["documents", "metadatas", "distances"],
     )
 
 
 def clear_collections() -> None:
+    """Drop the unified collection (and any legacy split collections)."""
     client = get_chroma_client()
-    for name in [TEXT_COLLECTION, IMAGE_COLLECTION]:
+    for name in (KNOWLEDGE_COLLECTION, LEGACY_TEXT_COLLECTION, LEGACY_IMAGE_COLLECTION):
         try:
             client.delete_collection(name)
-        except ValueError:
+        except Exception:  # noqa: BLE001 — absent collection raises per-version types
             pass
     _reset_collection_cache()
-    get_text_collection()
-    get_image_collection()
+    get_knowledge_collection()
+
+
+def count_by_source_type() -> dict[str, int]:
+    """Vector counts per source_type — used by health checks and ingest logs."""
+    collection = get_knowledge_collection()
+    counts: dict[str, int] = {}
+    for source_type in (SOURCE_TYPE_TEXT, SOURCE_TYPE_IMAGE):
+        try:
+            result = collection.get(where={"source_type": source_type}, include=[])
+            counts[source_type] = len(result.get("ids", []) or [])
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("Chroma count for source_type=%s failed: %s", source_type, exc)
+            counts[source_type] = -1
+    return counts
 
 
 def check_embedding_dimension(expected_dim: int | None, log_only: bool = True) -> bool | None:
-    """Inspect one stored embedding in the text collection and compare its length.
+    """Inspect one stored embedding in the collection and compare its length.
 
     - expected_dim: the configured embedding_dim from Settings (or None if unknown)
     - log_only: when False, raise RuntimeError on mismatch; when True, only log.
@@ -165,7 +273,7 @@ def check_embedding_dimension(expected_dim: int | None, log_only: bool = True) -
     this helper attempts a couple of common ways to read stored embeddings and
     falls back gracefully if unsupported.
     """
-    collection = get_text_collection()
+    collection = get_knowledge_collection()
 
     try:
         # Preferred: read a small sample without running a query.

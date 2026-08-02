@@ -59,7 +59,7 @@ async def _warmup() -> None:
     """
     import anyio
 
-    from backend.app.database.chroma import get_text_collection
+    from backend.app.database.chroma import get_image_collection, get_text_collection
     from backend.app.rag.embeddings import get_embedding_service
     from backend.app.rag.llm import get_llm_service
 
@@ -78,8 +78,23 @@ async def _warmup() -> None:
         logger.warning("Warm-up: LLM client build failed (%s)", exc)
 
     try:
+        # Opening the collection handle does NOT load the HNSW index — the first
+        # *query* does, and that measured ~7s on the text collection. Issue a
+        # throwaway query against both so the first real request doesn't pay it.
+        def _prime() -> None:
+            from backend.app.database.chroma import (
+                query_image_collection,
+                query_text_collection,
+            )
+
+            zero = [0.0] * settings.embedding_dim
+            query_text_collection(query_embedding=zero, n_results=1)
+            query_image_collection(query_embedding=zero, n_results=1)
+
         await anyio.to_thread.run_sync(get_text_collection)
-        logger.info("Warm-up: Chroma collection ready.")
+        await anyio.to_thread.run_sync(get_image_collection)
+        await anyio.to_thread.run_sync(_prime)
+        logger.info("Warm-up: Chroma collections ready (HNSW index primed).")
 
         # Best-effort embedding-dimension check: detect whether the stored
         # vectors in Chroma match the configured embedding model dimension.

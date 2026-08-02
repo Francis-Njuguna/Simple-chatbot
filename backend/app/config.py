@@ -23,7 +23,7 @@ from pathlib import Path
 from typing import Literal, Optional
 from urllib.parse import urlsplit
 
-from pydantic import Field, computed_field
+from pydantic import AliasChoices, Field, computed_field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -100,7 +100,9 @@ class Settings(BaseSettings):
     # LLM runtime knobs (previously missing) — critical for stable builds.
     # These are referenced by backend.app.rag.llm and must exist to avoid
     # AttributeError during warm-up and per-request LLM client construction.
-    llm_max_tokens: int = Field(default=1024, alias="LLM_MAX_TOKENS")
+    # 2048 (not 1024): the synthesis prompt asks for a complete numbered
+    # procedure plus caveats, which 1024 tokens truncates mid-answer.
+    llm_max_tokens: int = Field(default=2048, alias="LLM_MAX_TOKENS")
     llm_timeout: int = Field(default=30, alias="LLM_TIMEOUT")
     llm_max_retries: int = Field(default=2, alias="LLM_MAX_RETRIES")
 
@@ -115,6 +117,19 @@ class Settings(BaseSettings):
 
     # Anthropic (optional fallback)
     anthropic_api_key: str = Field(default="", alias="ANTHROPIC_API_KEY")
+    # Credential actually used by the Anthropic client. ANTHROPIC_AUTH_KEY is the
+    # preferred name (it is what gateways/proxies issue); ANTHROPIC_API_KEY is
+    # accepted as a fallback so existing deployments keep working.
+    anthropic_auth_key: str = Field(
+        default="",
+        validation_alias=AliasChoices("ANTHROPIC_AUTH_KEY", "ANTHROPIC_API_KEY"),
+    )
+    # Optional base URL for an Anthropic-compatible gateway/proxy. When unset the
+    # SDK default (api.anthropic.com) is used. Both names are accepted.
+    anthropic_base_url: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("ANTHROPIC_BASE_URL", "AUTH_BASE_URL"),
+    )
     # Use the faster Haiku variant by default to reduce latency for short help-desk answers.
     anthropic_model: str = Field(default="claude-haiku-4-5", alias="ANTHROPIC_MODEL")
 
@@ -174,6 +189,15 @@ class Settings(BaseSettings):
     top_k_images: int = Field(default=3, alias="TOP_K_IMAGES")
     mmr_diversity: float = Field(default=0.3, alias="MMR_DIVERSITY")
     rerank_top_n: int = Field(default=5, alias="RERANK_TOP_N")
+
+    # Seconds to cache article/image metadata hydrated from PostgreSQL. Keeps
+    # the chat hot path off the database; a re-ingest in this process clears the
+    # cache immediately, so this only bounds staleness for *other* processes.
+    metadata_cache_ttl: int = Field(default=300, alias="METADATA_CACHE_TTL")
+
+    # Extractive summary shape, computed during ingestion (no LLM call).
+    summary_max_sentences: int = Field(default=5, alias="SUMMARY_MAX_SENTENCES")
+    summary_max_chars: int = Field(default=1200, alias="SUMMARY_MAX_CHARS")
 
     kb_base_url: str = Field(default="https://helpdesk.amref.ac.ke", alias="KB_BASE_URL")
     kb_index_url: str = Field(
@@ -329,6 +353,11 @@ class Settings(BaseSettings):
     db_pool_size: int = Field(default=5, alias="DB_POOL_SIZE")
     db_max_overflow: int = Field(default=10, alias="DB_MAX_OVERFLOW")
     db_pool_timeout: int = Field(default=30, alias="DB_POOL_TIMEOUT")
+
+    # Run `alembic upgrade head` automatically on application startup. Handy on
+    # Railway/Docker where there is no separate migration step. Set to false when
+    # migrations are applied by a dedicated deploy job.
+    db_auto_migrate: bool = Field(default=True, alias="DB_AUTO_MIGRATE")
 
     def log_db_config(self) -> None:
         """Emit a redacted summary of the active DB config to stdout.

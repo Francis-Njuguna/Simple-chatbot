@@ -1,4 +1,18 @@
-"""Main ingestion orchestrator."""
+"""Main ingestion orchestrator.
+
+Storage split
+-------------
+* **PostgreSQL** — source of truth for all metadata (title, url, category,
+  summary, captions, file paths, chunk counts).
+* **ChromaDB** — one collection of vectors carrying only the keys needed to
+  retrieve: ``source_type``, ``article_id``/``image_id``, ``chunk_index`` and
+  ``category`` (kept for server-side filtering). Display fields are deliberately
+  NOT written here; see ``_chroma_text_metadata`` / ``_chroma_image_metadata``.
+
+Article summaries are extractive and computed inline (no LLM call), so ingestion
+stays fast and works without a model endpoint. The optional abstractive summary
+is a separate background pass — see ``services/enrichment_service.py``.
+"""
 
 import json
 from pathlib import Path
@@ -8,15 +22,29 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.app.config import get_settings
-from backend.app.database.chroma import clear_collections, upsert_image_embeddings, upsert_text_chunks
+from backend.app.database.chroma import (
+    clear_collections,
+    count_by_source_type,
+    upsert_image_embeddings,
+    upsert_text_chunks,
+)
 from backend.app.database.models import DocumentMetadata, ImageMetadata
 from backend.app.ingest.chunker import TextChunker
 from backend.app.ingest.crawler import KnowledgeBaseCrawler
 from backend.app.ingest.image_processor import ImageProcessor
+from backend.app.ingest.summarizer import summarize_extractive
 from backend.app.rag.embeddings import EmbeddingService
+from backend.app.services.metadata_service import invalidate_metadata_cache
 from backend.app.utils.logging import get_logger
 
 logger = get_logger(__name__)
+
+# Metadata keys Chroma is allowed to carry for a text chunk. Everything else
+# lives in PostgreSQL and is hydrated after retrieval.
+#   article_id  → join key back to Postgres
+#   chunk_index → citation ordering
+#   category    → server-side `where` filtering + MMR scoping
+_CHROMA_TEXT_KEYS = ("article_id", "chunk_index", "category")
 
 
 class IngestionPipeline:
@@ -72,7 +100,16 @@ class IngestionPipeline:
             )
             all_chunks.extend(chunks)
 
-            await self._upsert_document_metadata(article, len(chunks))
+            # Extractive, no LLM call — ingestion must not depend on a model
+            # endpoint being reachable.
+            summary = summarize_extractive(
+                article.text,
+                max_sentences=self.settings.summary_max_sentences,
+                max_chars=self.settings.summary_max_chars,
+                title=article.title,
+            )
+
+            await self._upsert_document_metadata(article, len(chunks), summary)
 
             if include_images:
                 for img in article.images:
@@ -81,6 +118,11 @@ class IngestionPipeline:
                         article_id=article.article_id,
                         alt_text=img.get("alt_text", ""),
                         category=article.category,
+                        caption=img.get("caption", ""),
+                        article_title=article.title,
+                        # Surrounding step text — one semantic embedding per
+                        # image is built from caption + alt text + this.
+                        context=img.get("context", ""),
                     )
                     if downloaded:
                         all_images.append(downloaded)
@@ -96,6 +138,17 @@ class IngestionPipeline:
 
         await self.db.commit()
 
+        # Article/image rows just changed — drop the read-through cache so this
+        # process serves the new metadata immediately.
+        invalidate_metadata_cache()
+
+        vector_counts = count_by_source_type()
+        logger.info(
+            "Ingestion complete — vectors in Chroma: text=%s image=%s",
+            vector_counts.get("text"),
+            vector_counts.get("image"),
+        )
+
         return {
             "status": "success",
             "articles_processed": len(articles),
@@ -104,7 +157,9 @@ class IngestionPipeline:
             "message": f"Ingested {len(articles)} articles with {chunks_created} chunks and {images_processed} images.",
         }
 
-    async def _upsert_document_metadata(self, article: Any, chunk_count: int) -> None:
+    async def _upsert_document_metadata(
+        self, article: Any, chunk_count: int, summary: str
+    ) -> None:
         result = await self.db.execute(
             select(DocumentMetadata).where(DocumentMetadata.article_id == article.article_id)
         )
@@ -115,6 +170,10 @@ class IngestionPipeline:
             existing.url = article.url
             existing.chunk_count = chunk_count
             existing.raw_content = article.text[:50000]
+            # Only overwrite with a non-empty summary: a crawl that returned
+            # thin text should not wipe a good summary from a previous run.
+            if summary:
+                existing.summary = summary
         else:
             self.db.add(
                 DocumentMetadata(
@@ -124,8 +183,23 @@ class IngestionPipeline:
                     url=article.url,
                     chunk_count=chunk_count,
                     raw_content=article.text[:50000],
+                    summary=summary or None,
                 )
             )
+
+    @staticmethod
+    def _chroma_text_metadata(metadata: dict[str, Any]) -> dict[str, Any]:
+        """Project chunk metadata down to the keys Chroma needs.
+
+        Title and url are dropped here — PostgreSQL owns them, and the
+        retriever hydrates them after filtering/MMR.
+        """
+        projected = {
+            key: metadata[key] for key in _CHROMA_TEXT_KEYS if metadata.get(key) is not None
+        }
+        # Chroma rejects None; normalise the filter key to a real string.
+        projected["category"] = projected.get("category") or "General"
+        return projected
 
     async def _store_chunks(self, chunks: list[dict[str, Any]]) -> int:
         if not chunks:
@@ -138,7 +212,7 @@ class IngestionPipeline:
             texts = [c["text"] for c in batch]
             embeddings = self.embedding_service.embed_texts(texts)
             ids = [c["chunk_id"] for c in batch]
-            metadatas = [c["metadata"] for c in batch]
+            metadatas = [self._chroma_text_metadata(c["metadata"]) for c in batch]
             upsert_text_chunks(ids=ids, embeddings=embeddings, documents=texts, metadatas=metadatas)
             total += len(batch)
         logger.info("Stored %d text chunks in ChromaDB", total)
@@ -186,16 +260,13 @@ class IngestionPipeline:
             texts = [img["embed_text"] for img in batch]
             embeddings = self.embedding_service.embed_texts(texts)
             ids = [img["image_id"] for img in batch]
+            # Minimal metadata: the join key, plus category for `where` filtering.
+            # Caption/filename/paths live in PostgreSQL and are hydrated after
+            # retrieval. The caption still shapes the *vector* via embed_text.
             metadatas = [
                 {
-                    "filename": img["filename"],
-                    "filepath": img["filepath"],
-                    "static_path": img["static_path"],
-                    "caption": img.get("caption", ""),
-                    "alt_text": img.get("alt_text", ""),
                     "article_id": img.get("article_id") or "",
-                    "category": img.get("category") or "",
-                    "keywords": img.get("keywords", ""),
+                    "category": img.get("category") or "General",
                 }
                 for img in batch
             ]
@@ -214,6 +285,7 @@ class IngestionPipeline:
                 if existing:
                     existing.filename = img["filename"]
                     existing.filepath = img["filepath"]
+                    existing.static_path = img.get("static_path")
                     existing.caption = img.get("caption")
                     existing.alt_text = img.get("alt_text")
                     existing.article_id = img.get("article_id")
@@ -226,6 +298,7 @@ class IngestionPipeline:
                             image_id=img["image_id"],
                             filename=img["filename"],
                             filepath=img["filepath"],
+                            static_path=img.get("static_path"),
                             caption=img.get("caption"),
                             alt_text=img.get("alt_text"),
                             article_id=img.get("article_id"),

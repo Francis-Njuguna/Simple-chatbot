@@ -208,16 +208,14 @@ class KnowledgeBaseCrawler:
 
     def _parse_article(self, article_id: str, html: str, url: str) -> ArticleData:
         soup = BeautifulSoup(html, "lxml")
+        # extract_title() already prefers <h1> and rejects template boilerplate.
+        # A previous "pick the shortest heading" pass used to run here and
+        # actively replaced good titles with the "Article Details" <h2> that
+        # appears on every page — don't reintroduce it.
         title = extract_title(html) or f"Article {article_id}"
         category = self._extract_category(html, soup)
         text = clean_html(html)
         images = extract_images_from_html(html, self.base_url)
-
-        for heading in soup.find_all(["h1", "h2", "h3"]):
-            heading_text = heading.get_text(strip=True)
-            if heading_text and len(heading_text) > 3 and heading_text not in title:
-                if len(heading_text) < len(title):
-                    title = heading_text
 
         return ArticleData(
             article_id=article_id,

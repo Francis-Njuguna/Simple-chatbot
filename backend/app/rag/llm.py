@@ -16,7 +16,7 @@ from typing import Any
 from langchain_core.messages import HumanMessage, SystemMessage
 
 from backend.app.config import get_settings
-from backend.app.prompts.templates import SYSTEM_PROMPT, USER_PROMPT_TEMPLATE
+from backend.app.prompts.templates import NO_IMAGES_NOTE, SYSTEM_PROMPT, USER_PROMPT_TEMPLATE
 from backend.app.utils.logging import get_logger
 
 logger = get_logger(__name__)
@@ -26,6 +26,7 @@ class LLMService:
     """Configurable LLM provider for answer generation.
 
     Provider priority (set via LLM_PROVIDER env var):
+        grok ->
         openai     → Qwen/OpenAI (default)
         gemini     → Google Gemini (fast & capable)
         anthropic  → haiku-4-5 / Sonnet  (optional fallback)
@@ -39,6 +40,8 @@ class LLMService:
     def _build_llm(self) -> Any:
         provider = self.settings.llm_provider
         max_tokens = self.settings.llm_max_tokens
+
+        
  
         if provider == "gemini":
             from langchain_google_genai import ChatGoogleGenerativeAI  # lazy import
@@ -59,15 +62,30 @@ class LLMService:
 
         if provider == "anthropic":
             from langchain_anthropic import ChatAnthropic  # lazy import
-  
-            logger.info("Using Anthropic model: %s", self.settings.anthropic_model)
+
+            api_key = self.settings.anthropic_auth_key
+            if not api_key:
+                raise RuntimeError(
+                    "ANTHROPIC_AUTH_KEY is not set. Set a valid Anthropic auth key."
+                )
+
+            base_url = self.settings.anthropic_base_url
+            logger.info(
+                "Using Anthropic model: %s (base_url=%s)",
+                self.settings.anthropic_model,
+                base_url or "default (api.anthropic.com)",
+            )
+            kwargs: dict[str, Any] = {}
+            if base_url:
+                kwargs["base_url"] = base_url
             return ChatAnthropic(
                 model=self.settings.anthropic_model,
-                api_key=self.settings.anthropic_api_key,
+                api_key=api_key,
                 temperature=0.0,
                 max_tokens=max_tokens,
                 timeout=self.settings.llm_timeout,
                 max_retries=self.settings.llm_max_retries,
+                **kwargs,
             )
  
         if self.settings.openai_api_base and provider != "openai":
@@ -154,10 +172,11 @@ class LLMService:
         )
 
     def _build_messages(
-        self, question: str, context: str, history: str
+        self, question: str, context: str, history: str, images: str
     ) -> list[Any]:
         user_prompt = USER_PROMPT_TEMPLATE.format(
             context=context,
+            images=images,
             history=history,
             question=question,
         )
@@ -165,11 +184,12 @@ class LLMService:
             SystemMessage(content=SYSTEM_PROMPT),
             HumanMessage(content=user_prompt),
         ]
- 
-    def _build_prompt(self, question: str, context: str, history: str) -> str:
+
+    def _build_prompt(self, question: str, context: str, history: str, images: str) -> str:
         return "\n\n".join(
             [SYSTEM_PROMPT, USER_PROMPT_TEMPLATE.format(
                 context=context,
+                images=images,
                 history=history,
                 question=question,
             )]
@@ -197,48 +217,94 @@ class LLMService:
             ).strip()
         return str(content).strip()
  
+    def _error_message(self, exc: Exception) -> str:
+        """Return a user-facing message describing an LLM *failure*.
+
+        Previously any exception here returned "I could not find that
+        information in the knowledge base", which made an auth error,
+        a timeout and a genuine knowledge-base miss indistinguishable —
+        both to users and to anyone reading the analytics logs.  Retrieval
+        may have worked perfectly; only the generation call failed.
+        """
+        provider = self.settings.llm_provider
+        name = type(exc).__name__
+
+        if "Authentication" in name or "PermissionDenied" in name:
+            detail = (
+                f"the {provider} endpoint rejected the configured credentials"
+            )
+        elif "NotFound" in name:
+            detail = (
+                f"the {provider} endpoint does not recognise the configured model "
+                f"({self.settings.anthropic_model if provider == 'anthropic' else 'see config'})"
+            )
+        elif "RateLimit" in name:
+            detail = f"the {provider} endpoint is rate limiting requests"
+        elif "Timeout" in name or "Connection" in name or "APIConnection" in name:
+            detail = f"the {provider} endpoint could not be reached"
+        else:
+            detail = f"the {provider} request failed ({name})"
+
+        return (
+            "I found relevant knowledge-base material but could not generate an "
+            f"answer: {detail}. This is a configuration or service problem, not a "
+            "gap in the knowledge base — please check the server logs."
+        )
+
     async def generate_answer(
         self,
         question: str,
         context: str,
         history: str = "No prior conversation.",
+        images: str = NO_IMAGES_NOTE,
     ) -> str:
         if self._use_chat_model():
-            prompt = self._build_messages(question, context, history)
+            prompt = self._build_messages(question, context, history, images)
         else:
-            prompt = self._build_prompt(question, context, history)
- 
+            prompt = self._build_prompt(question, context, history, images)
+
         try:
             response = await self._llm.ainvoke(prompt)
             return self._extract_text(response)
-        except Exception:
+        except Exception as exc:
             logger.exception("LLM generation failed")
-            return (
-                "I could not find that information in the Amref Help Desk knowledge base."
-            )
- 
+            return self._error_message(exc)
+
+    async def complete(self, system: str, user: str) -> str:
+        """Run a one-off prompt with no chat scaffolding.
+
+        Unlike :meth:`generate_answer`, exceptions propagate — background jobs
+        need to distinguish a failed call from a successful empty answer, and
+        must not persist an error string as if it were content.
+        """
+        if self._use_chat_model():
+            prompt: Any = [SystemMessage(content=system), HumanMessage(content=user)]
+        else:
+            prompt = f"{system}\n\n{user}"
+        response = await self._llm.ainvoke(prompt)
+        return self._extract_text(response)
+
     async def stream_answer(
         self,
         question: str,
         context: str,
         history: str = "No prior conversation.",
+        images: str = NO_IMAGES_NOTE,
     ):
         """Yield answer chunks as they arrive (for streaming responses)."""
         if self._use_chat_model():
-            prompt = self._build_messages(question, context, history)
+            prompt = self._build_messages(question, context, history, images)
         else:
-            prompt = self._build_prompt(question, context, history)
+            prompt = self._build_prompt(question, context, history, images)
  
         try:
             async for chunk in self._llm.astream(prompt):
                 text = self._extract_text(chunk)
                 if text:
                     yield text
-        except Exception:
+        except Exception as exc:
             logger.exception("LLM streaming failed")
-            yield (
-                "I could not find that information in the Amref Help Desk knowledge base!."
-            )
+            yield self._error_message(exc)
 
 
 # ---------------------------------------------------------------------------
