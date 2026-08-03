@@ -18,13 +18,14 @@ import json
 from pathlib import Path
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.app.config import get_settings
 from backend.app.database.chroma import (
     clear_collections,
     count_by_source_type,
+    delete_stale_article_chunks,
     upsert_image_embeddings,
     upsert_text_chunks,
 )
@@ -34,6 +35,7 @@ from backend.app.ingest.crawler import KnowledgeBaseCrawler
 from backend.app.ingest.image_processor import ImageProcessor
 from backend.app.ingest.summarizer import summarize_extractive
 from backend.app.rag.embeddings import EmbeddingService
+from backend.app.rag.lexical import invalidate_lexical_index, invalidate_lexicon
 from backend.app.services.metadata_service import invalidate_metadata_cache
 from backend.app.utils.logging import get_logger
 
@@ -63,11 +65,69 @@ class IngestionPipeline:
         self.embedding_service = embedding_service or EmbeddingService()
 
     async def run(self, force: bool = False, include_images: bool = True) -> dict[str, Any]:
-        if force:
-            clear_collections()
-            logger.info("ChromaDB collections cleared for full re-ingest")
-
+        # Crawl BEFORE clearing anything. The old order cleared the collection
+        # first, so a crawl that then failed — network, TLS, a site change —
+        # left the KB permanently empty with no way back short of a working
+        # crawl. Destroy the live index only once replacement content is in hand.
         articles = await self.crawler.crawl_all()
+
+        if force:
+            if not articles:
+                # Refusing here is the whole point: an empty crawl must not be
+                # allowed to wipe a working knowledge base.
+                logger.error(
+                    "Crawl returned 0 articles — REFUSING to clear the existing "
+                    "collection. The knowledge base is unchanged."
+                )
+                return {
+                    "status": "error",
+                    "articles_processed": 0,
+                    "chunks_created": 0,
+                    "images_processed": 0,
+                    "message": (
+                        "Crawl returned no articles; existing knowledge base left "
+                        "intact. Check crawler connectivity/TLS before retrying."
+                    ),
+                }
+
+            # A *partial* crawl is the subtler danger. crawl_all() swallows
+            # per-article errors and returns whatever succeeded, so one TLS or
+            # network blip can return 3 of 20 articles — enough to pass the
+            # zero-check above, and clearing on that silently discards the other
+            # 17. Compare against what Postgres already knows and refuse a
+            # suspicious collapse.
+            known = (
+                await self.db.execute(select(func.count()).select_from(DocumentMetadata))
+            ).scalar_one()
+            if known and len(articles) < known * self.settings.reingest_min_coverage:
+                logger.error(
+                    "Crawl returned only %d article(s) but Postgres knows %d "
+                    "(< %.0f%% coverage) — REFUSING to clear. Set "
+                    "REINGEST_MIN_COVERAGE=0 to override once the drop is "
+                    "confirmed to be a genuine upstream deletion.",
+                    len(articles),
+                    known,
+                    self.settings.reingest_min_coverage * 100,
+                )
+                return {
+                    "status": "error",
+                    "articles_processed": len(articles),
+                    "chunks_created": 0,
+                    "images_processed": 0,
+                    "message": (
+                        f"Crawl returned {len(articles)} of {known} known articles; "
+                        f"existing knowledge base left intact. Investigate the "
+                        f"crawler before re-running, or set REINGEST_MIN_COVERAGE=0 "
+                        f"if the articles were genuinely removed upstream."
+                    ),
+                }
+
+            clear_collections()
+            logger.info(
+                "ChromaDB collections cleared for full re-ingest (%d articles crawled)",
+                len(articles),
+            )
+
         raw_dir = Path(self.settings.raw_data_dir)
         raw_dir.mkdir(parents=True, exist_ok=True)
 
@@ -134,13 +194,18 @@ class IngestionPipeline:
                 all_images.append(img)
 
         chunks_created = await self._store_chunks(all_chunks)
+
+        # Incremental runs only: a force run already cleared the collection, so
+        # there is nothing stale left to find and the extra scans are pure cost.
+        stale_removed = 0
+        if not force:
+            stale_removed = self._prune_stale_chunks(all_chunks)
+
         images_processed = await self._store_images(all_images)
 
         await self.db.commit()
 
-        # Article/image rows just changed — drop the read-through cache so this
-        # process serves the new metadata immediately.
-        invalidate_metadata_cache()
+        self._invalidate_derived_caches()
 
         vector_counts = count_by_source_type()
         logger.info(
@@ -154,8 +219,84 @@ class IngestionPipeline:
             "articles_processed": len(articles),
             "chunks_created": chunks_created,
             "images_processed": images_processed,
-            "message": f"Ingested {len(articles)} articles with {chunks_created} chunks and {images_processed} images.",
+            "stale_chunks_removed": stale_removed,
+            "vectors_text": vector_counts.get("text"),
+            "vectors_image": vector_counts.get("image"),
+            "message": (
+                f"Ingested {len(articles)} articles with {chunks_created} chunks "
+                f"and {images_processed} images."
+                + (f" Pruned {stale_removed} stale chunk(s)." if stale_removed else "")
+            ),
         }
+
+    @staticmethod
+    def _invalidate_derived_caches() -> None:
+        """Drop every cache derived from the corpus we just rewrote.
+
+        Four independent caches go stale the moment ingestion commits, and each
+        one fails in a different, quiet way if it is left behind:
+
+        * **metadata cache** — read-through title/url/caption lookups, would
+          keep serving the pre-crawl titles (e.g. the old 'Article Details').
+        * **BM25 index** — built from a full scan of the Chroma text corpus. A
+          stale index scores against deleted chunk ids, so lexical hits point at
+          rows that no longer exist and silently drop out of the fused ranking.
+        * **lexicon** — the vocabulary that backs fuzzy query correction. New
+          articles introduce new terms; without a rebuild they can never be
+          matched as corrections.
+        * **retrieval cache** — TTL'd query→results map. Would keep serving
+          pre-ingest answers for up to ``retrieval_cache_ttl`` seconds.
+
+        Best-effort by design: ingestion has already committed by this point, so
+        a cache-flush failure must be logged, never raised. The worst case is a
+        stale read that expires on its own.
+        """
+        invalidate_metadata_cache()
+
+        try:
+            invalidate_lexical_index()
+            invalidate_lexicon()
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("Failed to invalidate lexical index/lexicon: %s", exc)
+
+        try:
+            # Imported lazily: retriever pulls in embeddings/reranker at module
+            # scope, and ingestion should not depend on that import graph.
+            from backend.app.rag.retriever import get_retriever
+
+            get_retriever().clear_cache()
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("Failed to clear the retrieval cache: %s", exc)
+
+        logger.info("Derived caches invalidated (metadata, BM25, lexicon, retrieval).")
+
+    @staticmethod
+    def _prune_stale_chunks(chunks: list[dict[str, Any]]) -> int:
+        """Remove positional chunk ids this run did not rewrite, per article.
+
+        Only articles present in ``chunks`` are touched. An article the crawl
+        missed this time is left completely alone — a transient fetch failure
+        must not silently delete good content.
+        """
+        by_article: dict[str, list[str]] = {}
+        for chunk in chunks:
+            article_id = chunk["metadata"].get("article_id")
+            if article_id:
+                by_article.setdefault(str(article_id), []).append(chunk["chunk_id"])
+
+        total = 0
+        for article_id, keep_ids in by_article.items():
+            try:
+                total += delete_stale_article_chunks(article_id, keep_ids)
+            except Exception as exc:  # noqa: BLE001
+                # A failed prune leaves stale chunks, which is bad but not as bad
+                # as aborting an ingest that has already written good content.
+                logger.warning(
+                    "Stale-chunk prune failed for article %s: %s", article_id, exc
+                )
+        if total:
+            logger.info("Pruned %d stale chunk(s) across %d article(s)", total, len(by_article))
+        return total
 
     async def _upsert_document_metadata(
         self, article: Any, chunk_count: int, summary: str

@@ -6,11 +6,103 @@ from typing import Any, Optional
 from bs4 import BeautifulSoup
 
 
+# Block-level tags that genuinely separate thoughts. Everything else (notably
+# <span>) is inline and must NOT introduce whitespace — see _block_text.
+_BLOCK_TAGS = [
+    "p", "div", "li", "tr", "td", "th", "br", "h1", "h2", "h3", "h4", "h5", "h6",
+    "table", "ul", "ol", "section", "article", "blockquote", "pre",
+]
+
+# Nav/chrome lines the KB template renders on every article page. These carry no
+# article meaning but were being embedded into every chunk, diluting the vector.
+_BOILERPLATE_LINES = {
+    "skip to main content",
+    "amiu",
+    "help desk",
+    "knowledgebase",
+    "knowledge base",
+    "suggested knowledgebase articles:",
+    "suggested knowledgebase articles",
+    "go back",
+    "related articles",
+    "was this article helpful?",
+    "yes",
+    "no",
+    "rating :",
+    "rating:",
+    "article details",
+    "home",
+    "print",
+    "email",
+}
+
+# "Article ID: 3", "Category: LMS" — template metadata rows, not content.
+_BOILERPLATE_PREFIXES = ("article id:", "category:", "rating :", "rating:", "views:")
+
+
+def _block_text(soup: BeautifulSoup) -> str:
+    """Extract text inserting newlines only at BLOCK boundaries.
+
+    Why this exists
+    ---------------
+    The KB pages are Word exports: individual letters are wrapped in
+    ``<span style="letter-spacing:-0.85pt;">`` for kerning. BeautifulSoup's
+    ``get_text(separator="\\n")`` inserts the separator between *every* element,
+    inline ones included, so "Type" arrives as "T\\nype" and "redirected" as
+    "r\\nedi\\nr\\nec\\nt\\ned".
+
+    That destroyed the embeddings: a chunk of shattered word-fragments has
+    almost no lexical overlap with a natural-language query, and it made BM25
+    impossible. Emitting separators only around block tags keeps words intact
+    while still preserving paragraph structure.
+    """
+    for tag in soup.find_all(_BLOCK_TAGS):
+        tag.insert_before("\n")
+        tag.insert_after("\n")
+    # separator="" — inline tags (<span>, <strong>, <a>) must not add whitespace.
+    return soup.get_text(separator="")
+
+
+def _strip_boilerplate(text: str) -> str:
+    """Drop template chrome lines so chunks carry article content only.
+
+    Also collapses a line that merely repeats the previous one. The KB template
+    prints the article title three times before the body (``<title>``, the
+    breadcrumb tail, and the content ``<h1>``); left in, that tripled heading
+    dominated chunk 0 of every article.
+    """
+    kept: list[str] = []
+    last_content = ""
+    for line in text.split("\n"):
+        stripped = line.strip()
+        if not stripped:
+            kept.append("")
+            continue
+        lowered = stripped.lower()
+        if lowered in _BOILERPLATE_LINES:
+            continue
+        if any(lowered.startswith(prefix) for prefix in _BOILERPLATE_PREFIXES):
+            continue
+        # Punctuation-only leftovers ("|", "-") from split-up inline markup.
+        if not any(char.isalnum() for char in stripped):
+            continue
+        if lowered == last_content:
+            continue
+        kept.append(stripped)
+        last_content = lowered
+    return "\n".join(kept)
+
+
 def clean_html(html: str) -> str:
-    """Remove HTML tags, scripts, nav elements, and normalize whitespace."""
+    """Remove HTML tags, scripts, nav elements, and normalize whitespace.
+
+    Block-aware: inline ``<span>`` wrappers used for letter-spacing never split
+    a word (see :func:`_block_text`), and per-page template chrome is dropped
+    (see :func:`_strip_boilerplate`).
+    """
     soup = BeautifulSoup(html, "lxml")
 
-    for tag in soup(["script", "style", "nav", "header", "footer", "aside", "noscript"]):
+    for tag in soup(["script", "style", "nav", "header", "footer", "aside", "noscript", "title"]):
         tag.decompose()
 
     for selector in [
@@ -21,13 +113,22 @@ def clean_html(html: str) -> str:
         "#menu",
         ".breadcrumb",
         ".footer",
+        # The "Article Details" accordion: Article ID / Category / Rating /
+        # Views — template metadata rendered on every page, not article content.
+        ".ticket__params",
     ]:
         for el in soup.select(selector):
             el.decompose()
 
-    text = soup.get_text(separator="\n")
-    text = re.sub(r"\n{3,}", "\n\n", text)
+    text = _block_text(soup)
+    # Word exports are full of non-breaking spaces; fold them to real spaces so
+    # tokenisers (and BM25) see ordinary word boundaries.
+    text = text.replace("\xa0", " ").replace("​", "")
+    # Collapse spaces/tabs first so boilerplate lines match exactly, then drop
+    # them, then normalise the blank lines the removals left behind.
     text = re.sub(r"[ \t]+", " ", text)
+    text = _strip_boilerplate(text)
+    text = re.sub(r"\n{3,}", "\n\n", text)
     return text.strip()
 
 

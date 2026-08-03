@@ -15,7 +15,15 @@ openai>=1.58.1
 langchain-google-genai>=0.1.0
 google-generativeai>=0.3.0
 sentence-transformers>=3.3.1
+# Lexical half of hybrid retrieval (rag/lexical.py). Nothing else pulls this
+# in transitively — omitting it fails at import, not at build.
+rank-bm25>=0.2.2
 httpx>=0.28.1
+# Imported directly (retriever, embeddings, session, rag_service, main) rather
+# than only reached through Starlette, so it is pinned here in its own right.
+anyio>=4.6.0
+# Imported directly by utils/tls.py and ingest/crawler.py for the CA bundle.
+certifi>=2024.8.30
 beautifulsoup4>=4.12.3
 lxml>=5.3.0
 pydantic[email]>=2.10.3

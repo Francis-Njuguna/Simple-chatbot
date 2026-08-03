@@ -5,8 +5,8 @@ Performance notes
 * The underlying LangChain chat client (and its HTTP connection pool) is built
   **once** and reused for the life of the process via ``get_llm_service`` — it
   is no longer reconstructed on every request.
-* ``max_tokens`` is configurable (default reduced to 1024) so the LLM does not
-  spend time generating far more tokens than a help-desk answer needs.
+* ``max_tokens`` is configurable (default 2048) so the LLM has room for a
+  complete numbered procedure plus caveats without truncating mid-answer.
 """
 
 
@@ -81,7 +81,7 @@ class LLMService:
             return ChatAnthropic(
                 model=self.settings.anthropic_model,
                 api_key=api_key,
-                temperature=0.0,
+                temperature=0.5,
                 max_tokens=max_tokens,
                 timeout=self.settings.llm_timeout,
                 max_retries=self.settings.llm_max_retries,

@@ -114,6 +114,34 @@ async def _warmup() -> None:
     except Exception as exc:  # noqa: BLE001
         logger.warning("Warm-up: Chroma warm-up failed (%s)", exc)
 
+    # Both of the following read the Chroma text corpus, so they must run after
+    # the collection warm-up above.
+    try:
+        # BM25 needs a full scan of the text corpus to compute IDF. Small KB, but
+        # doing it here keeps it off the first user query.
+        from backend.app.rag.lexical import get_lexical_index
+
+        await anyio.to_thread.run_sync(get_lexical_index().rebuild)
+        logger.info("Warm-up: BM25 lexical index built.")
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Warm-up: lexical index build failed (%s)", exc)
+
+    try:
+        # The cross-encoder is by far the heaviest warm-up: a cold run that has
+        # to download the weights measured ~46s. Paying it here rather than in
+        # the first request is the difference between a 47s and a sub-second
+        # first answer. Failure is non-fatal — the retriever falls back to
+        # cosine ordering (see rag/reranker.py).
+        from backend.app.rag.reranker import get_reranker
+
+        reranker = get_reranker()
+        await anyio.to_thread.run_sync(reranker.warmup)
+        # A first predict() also compiles the graph; do one so query #1 doesn't.
+        await anyio.to_thread.run_sync(reranker.score, "warmup", ["warmup passage"])
+        logger.info("Warm-up: cross-encoder reranker ready.")
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Warm-up: cross-encoder warm-up failed (%s)", exc)
+
 
 # ---------------------------------------------------------------------------
 # Application lifespan
