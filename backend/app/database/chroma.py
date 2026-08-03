@@ -172,6 +172,38 @@ def upsert_text_chunks(
     )
 
 
+def delete_stale_article_chunks(article_id: str, keep_ids: list[str]) -> int:
+    """Delete chunks of ``article_id`` that this ingest did not rewrite.
+
+    Chunk ids are positional (``{article_id}_chunk_{n}``) and storage is upsert,
+    so an article that shrinks — 10 chunks last run, 5 now — leaves
+    ``_chunk_5``..``_chunk_9`` behind forever. Those orphans still match queries
+    and are still handed to the LLM as current, which is invisible from the
+    outside: nothing errors, the answer is just quietly out of date.
+
+    A ``force=True`` run clears the whole collection so it never sees this. The
+    incremental path does, which is exactly where it is hardest to notice.
+
+    Returns the number of stale chunks removed.
+    """
+    collection = get_knowledge_collection()
+    existing = collection.get(
+        where={"$and": [{"source_type": SOURCE_TYPE_TEXT}, {"article_id": article_id}]},
+        include=[],
+    )
+    existing_ids = set(existing.get("ids", []) or [])
+    stale = sorted(existing_ids - set(keep_ids))
+    if stale:
+        collection.delete(ids=stale)
+        logger.info(
+            "Deleted %d stale chunk(s) for article %s: %s",
+            len(stale),
+            article_id,
+            stale[:5],
+        )
+    return len(stale)
+
+
 def upsert_image_embeddings(
     ids: list[str],
     embeddings: list[list[float]],
@@ -230,6 +262,51 @@ def query_image_collection(
         where=_build_where(SOURCE_TYPE_IMAGE, where),
         include=["documents", "metadatas", "distances"],
     )
+
+
+def fetch_text_chunks_by_id(ids: list[str], include_embeddings: bool = True) -> dict[str, Any]:
+    """Load specific text chunks by id.
+
+    Needed by hybrid search: BM25 can surface a chunk the vector query never
+    returned, so that chunk has no embedding in hand — but MMR needs one for
+    every candidate. This fetches the missing vectors in a single call rather
+    than re-embedding the text.
+    """
+    if not ids:
+        return {"ids": [], "documents": [], "metadatas": [], "embeddings": []}
+
+    collection = get_knowledge_collection()
+    include = ["documents", "metadatas"]
+    if include_embeddings:
+        include.append("embeddings")
+    result = collection.get(ids=ids, include=include)
+    return {
+        "ids": result.get("ids", []) or [],
+        "documents": result.get("documents", []) or [],
+        "metadatas": result.get("metadatas", []) or [],
+        "embeddings": result.get("embeddings", []) if include_embeddings else [],
+    }
+
+
+def fetch_all_text_documents() -> dict[str, Any]:
+    """Read every text chunk (id, document, metadata) for the BM25 index.
+
+    BM25 needs the whole corpus in memory to compute IDF, so unlike the vector
+    path this is a full scan. The KB is small (tens of chunks), and the result is
+    cached by the lexical index for the life of the process — see
+    ``rag/lexical.py``. Embeddings are deliberately NOT included: the lexical
+    index only ever touches tokens.
+    """
+    collection = get_knowledge_collection()
+    result = collection.get(
+        where={"source_type": SOURCE_TYPE_TEXT},
+        include=["documents", "metadatas"],
+    )
+    return {
+        "ids": result.get("ids", []) or [],
+        "documents": result.get("documents", []) or [],
+        "metadatas": result.get("metadatas", []) or [],
+    }
 
 
 def clear_collections() -> None:

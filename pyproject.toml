@@ -27,8 +27,14 @@ dependencies = [
     "anthropic>=0.40.0",
     # Embeddings — sentence-transformers (optional fallback for Ollama)
     "sentence-transformers>=3.3.1",
+    # Lexical half of hybrid retrieval (rag/lexical.py). No transitive path.
+    "rank-bm25>=0.2.2",
     # HTTP client (used by Ollama embedding backend)
     "httpx>=0.28.1",
+    # Structured concurrency — imported directly, not just via Starlette
+    "anyio>=4.6.0",
+    # CA bundle — imported directly by utils/tls.py and ingest/crawler.py
+    "certifi>=2024.8.30",
     # Crawling / parsing
     "beautifulsoup4>=4.12.3",
     "lxml>=5.3.0",

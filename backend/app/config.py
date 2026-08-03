@@ -137,11 +137,15 @@ class Settings(BaseSettings):
     gemini_api_key: str = Field(default="", alias="GEMINI_API_KEY")
     gemini_model: str = Field(default="gemini-2.0-flash", alias="GEMINI_MODEL")
 
-    # Ollama (local fallback)
-    #ollama_base_url: str = Field(default="http://localhost:11434", alias="OLLAMA_BASE_URL")
-    #ollama_model: str = Field(default="qwen3:4b", alias="OLLAMA_MODEL")
-    #ollama_timeout: int = Field(default=120, alias="OLLAMA_TIMEOUT")
-    #ollama_keep_alive: str | int | None = Field(default="-1", alias="OLLAMA_KEEP_ALIVE")
+    # Ollama (local fallback).
+    # These must stay defined even when Ollama is unused: rag/llm.py and
+    # rag/embeddings.py read settings.ollama_* unconditionally on their Ollama
+    # branches, so commenting them out turned "Ollama not running" into an
+    # AttributeError at provider-build time.
+    ollama_base_url: str = Field(default="http://localhost:11434", alias="OLLAMA_BASE_URL")
+    ollama_model: str = Field(default="qwen3:4b", alias="OLLAMA_MODEL")
+    ollama_timeout: int = Field(default=120, alias="OLLAMA_TIMEOUT")
+    ollama_keep_alive: str | int | None = Field(default="-1", alias="OLLAMA_KEEP_ALIVE")
  
     # ------------------------------------------------------------------
     # Embeddings
@@ -187,8 +191,83 @@ class Settings(BaseSettings):
     chunk_overlap: int = Field(default=50, alias="CHUNK_OVERLAP")
     top_k_retrieval: int = Field(default=5, alias="TOP_K_RETRIEVAL")
     top_k_images: int = Field(default=3, alias="TOP_K_IMAGES")
-    mmr_diversity: float = Field(default=0.3, alias="MMR_DIVERSITY")
-    rerank_top_n: int = Field(default=5, alias="RERANK_TOP_N")
+
+    # MMR trade-off: 1.0 = pure relevance, 0.0 = pure diversity.
+    # Was 0.3, which weighted diversity 70/30 over relevance — backwards for
+    # help-desk QA, where the user wants the *most correct* passage first and
+    # diversity only matters for breaking up near-duplicate chunks.
+    mmr_diversity: float = Field(default=0.7, alias="MMR_DIVERSITY")
+
+    # ------------------------------------------------------------------
+    # Hybrid retrieval (BM25 + vector)
+    #
+    # Vector search alone misses exact-token queries ("SMOWL", "VAS", an error
+    # code); BM25 alone misses paraphrases. Results are fused with Reciprocal
+    # Rank Fusion, which combines *rankings* rather than raw scores, so the two
+    # very differently-scaled systems need no score normalisation.
+    # ------------------------------------------------------------------
+    hybrid_search_enabled: bool = Field(default=True, alias="HYBRID_SEARCH_ENABLED")
+    # Relative pull of each ranking in the fusion. Vector is weighted higher
+    # because paraphrased questions are the common case here.
+    hybrid_vector_weight: float = Field(default=0.6, alias="HYBRID_VECTOR_WEIGHT")
+    hybrid_bm25_weight: float = Field(default=0.4, alias="HYBRID_BM25_WEIGHT")
+    # RRF damping constant. 60 is the value from the original RRF paper and
+    # keeps any single engine's #1 hit from dominating the fused order.
+    rrf_k: int = Field(default=60, alias="RRF_K")
+
+    # Candidates pulled from each engine before MMR/rerank narrow them down.
+    # Must exceed mmr_shortlist or MMR has nothing to choose between — the old
+    # code passed k == pool size, which made MMR a no-op.
+    retrieval_candidate_pool: int = Field(default=30, alias="RETRIEVAL_CANDIDATE_POOL")
+    # How many survive MMR and go to the (more expensive) cross-encoder.
+    mmr_shortlist: int = Field(default=12, alias="MMR_SHORTLIST")
+
+    # ------------------------------------------------------------------
+    # Cross-encoder reranking
+    #
+    # The bi-encoder scores query and chunk independently; a cross-encoder reads
+    # both together and is markedly better at ordering. It only runs on the MMR
+    # shortlist, so the cost is bounded. Disabled automatically if the model
+    # cannot be loaded — retrieval falls back to cosine order rather than fail.
+    # ------------------------------------------------------------------
+    rerank_enabled: bool = Field(default=True, alias="RERANK_ENABLED")
+    rerank_model: str = Field(
+        default="cross-encoder/ms-marco-MiniLM-L-6-v2", alias="RERANK_MODEL"
+    )
+    # Absolute relevance gate on the cross-encoder logit. Unlike cosine, this
+    # score reflects whether a passage *answers* the query, so it can reject
+    # material that merely shares vocabulary with it.
+    #
+    # Calibrated against this KB with ms-marco-MiniLM-L-6-v2: chunks that
+    # genuinely answered a question scored about -5..+4, while a question the
+    # articles do not cover ("how do I submit an assignment in Moodle?") scored
+    # ≈ -11 on every chunk despite clearing the cosine floor. -8.0 sits in the
+    # empty band between those two clusters. Note this is model-specific — a
+    # different rerank_model produces a different scale and needs re-calibrating.
+    # Set to a large negative number (e.g. -1e9) to disable the gate.
+    rerank_min_score: float = Field(default=-8.0, alias="RERANK_MIN_SCORE")
+
+    # ------------------------------------------------------------------
+    # Query preprocessing + retrieval cache
+    # ------------------------------------------------------------------
+    # Fuzzy-corrects domain terms ("smwol" → "smowl") against the KB vocabulary.
+    # Purely local (difflib) — no LLM call, so it costs well under a millisecond.
+    query_rewrite_enabled: bool = Field(default=True, alias="QUERY_REWRITE_ENABLED")
+    # Seconds to cache a full retrieval result keyed by normalised query.
+    retrieval_cache_ttl: int = Field(default=300, alias="RETRIEVAL_CACHE_TTL")
+    retrieval_cache_size: int = Field(default=256, alias="RETRIEVAL_CACHE_SIZE")
+
+    # Emit per-query retrieval diagnostics (candidates, scores, fusion, final
+    # context). Verbose and can echo user queries into logs — keep OFF in
+    # production. Forced off when APP_ENV is production-like; see
+    # ``retrieval_debug_active``.
+    retrieval_debug: bool = Field(default=False, alias="RETRIEVAL_DEBUG")
+
+    # Floor a chunk's score must clear to be handed to the LLM. Below this the
+    # context is treated as a miss so the model declines instead of answering
+    # from loosely-related material.
+    min_relevance_score: float = Field(default=0.25, alias="MIN_RELEVANCE_SCORE")
+    min_image_score: float = Field(default=0.30, alias="MIN_IMAGE_SCORE")
 
     # Seconds to cache article/image metadata hydrated from PostgreSQL. Keeps
     # the chat hot path off the database; a re-ingest in this process clears the
@@ -231,6 +310,19 @@ class Settings(BaseSettings):
         alias="KB_CATEGORY_IDS",
     )
 
+    # How many articles to fetch at once during a crawl. Bounded so ingestion
+    # does not hammer the KB host; raise only if the host tolerates it.
+    crawl_concurrency: int = Field(default=6, alias="CRAWL_CONCURRENCY")
+
+    # Guard against a partial crawl wiping a good knowledge base. A force
+    # re-ingest clears the collection before writing, so if the crawler returns
+    # far fewer articles than Postgres already knows about — one TLS blip is
+    # enough, since crawl_all() swallows per-article errors — the clear would
+    # discard content the crawl simply failed to re-fetch. Below this fraction
+    # of the known article count, ingestion refuses and leaves the KB intact.
+    # Set to 0 to disable (e.g. when articles were genuinely removed upstream).
+    reingest_min_coverage: float = Field(default=0.5, alias="REINGEST_MIN_COVERAGE")
+
     data_dir: str = Field(default="./data", alias="DATA_DIR")
     raw_data_dir: str = Field(default="./data/raw", alias="RAW_DATA_DIR")
     processed_data_dir: str = Field(default="./data/processed", alias="PROCESSED_DATA_DIR")
@@ -245,6 +337,21 @@ class Settings(BaseSettings):
     # ------------------------------------------------------------------
     # Computed helpers
     # ------------------------------------------------------------------
+
+    @property
+    def is_production(self) -> bool:
+        return (self.app_env or "").strip().lower() in {"production", "prod", "staging"}
+
+    @property
+    def retrieval_debug_active(self) -> bool:
+        """Whether to emit per-query retrieval diagnostics.
+
+        RETRIEVAL_DEBUG is honoured only outside production-like environments.
+        The dumps include the raw user query and full chunk bodies, which is
+        exactly what you want when diagnosing a bad answer and exactly what you
+        do not want written to a production log.
+        """
+        return bool(self.retrieval_debug) and not self.is_production
 
     @property
     def kb_category_id_list(self) -> list[str]:

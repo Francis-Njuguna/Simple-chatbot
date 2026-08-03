@@ -1,5 +1,6 @@
 """Knowledge base web crawler."""
 
+import asyncio
 import os
 import re
 import ssl
@@ -26,20 +27,11 @@ CATEGORY_PATTERN = re.compile(r"knowledgebase\.php\?category=(\d+)", re.IGNORECA
 os.environ.setdefault("SSL_CERT_FILE", certifi.where())
 os.environ.setdefault("REQUESTS_CA_BUNDLE", certifi.where())
 
-# ⚠️  DEBUG WORKAROUND — HARD OVERRIDE ⚠️
-# The single httpx client factory below (`_new_client`) is the ONE code path
-# every category- and article-crawl request goes through. Previous attempts to
-# disable verification via KB_VERIFY_SSL only took effect if that env var was
-# set, and the diagnostics showed it was NOT — so the client was still built
-# with an SSLContext and kept throwing CERTIFICATE_VERIFY_FAILED.
-#
-# This flag forces verify=False on the real crawl constructor unconditionally,
-# independent of env resolution, so the crawl can complete against
-# helpdesk.amref.ac.ke's incomplete certificate chain.
-#
-# INSECURE (MITM-exploitable). This is a local debugging switch only — flip it
-# back to False and rely on KB_VERIFY_SSL / KB_CA_BUNDLE before deploying.
-_FORCE_DISABLE_TLS_VERIFY = True
+# Local debug override — set to True only when diagnosing TLS issues against
+# helpdesk.amref.ac.ke's incomplete certificate chain. Must be False in any
+# deployed build; _resolve_verify() below also refuses to disable TLS when
+# APP_ENV=production/staging as a second guardrail.
+_FORCE_DISABLE_TLS_VERIFY = False
 
 
 def _resolve_verify() -> Union[ssl.SSLContext, bool]:
@@ -263,25 +255,59 @@ class KnowledgeBaseCrawler:
         )
         return discovered_articles
 
-    async def crawl_article(self, article_id: str) -> Optional[ArticleData]:
+    async def crawl_article(
+        self, article_id: str, client: Optional[httpx.AsyncClient] = None
+    ) -> Optional[ArticleData]:
+        """Fetch and parse one article.
+
+        ``client`` lets a caller share one connection pool across many articles
+        (see :meth:`crawl_all`). When omitted a throwaway client is created, so
+        this stays usable as a standalone one-shot call.
+        """
         url = f"{self.base_url}/knowledgebase.php?article={article_id}"
-        async with self._new_client() as client:
-            try:
-                html = await self._fetch(client, url)
-                return self._parse_article(article_id, html, url)
-            except httpx.ConnectError as exc:
-                logger.error("CONNECT/TLS error crawling article %s: %r", article_id, exc)
-                return None
-            except httpx.HTTPError as exc:
-                logger.error("Failed to crawl article %s: %s", article_id, exc)
-                return None
+        if client is not None:
+            return await self._crawl_article_with(client, article_id, url)
+        async with self._new_client() as owned:
+            return await self._crawl_article_with(owned, article_id, url)
+
+    async def _crawl_article_with(
+        self, client: httpx.AsyncClient, article_id: str, url: str
+    ) -> Optional[ArticleData]:
+        try:
+            html = await self._fetch(client, url)
+            return self._parse_article(article_id, html, url)
+        except httpx.ConnectError as exc:
+            logger.error("CONNECT/TLS error crawling article %s: %r", article_id, exc)
+            return None
+        except httpx.HTTPError as exc:
+            logger.error("Failed to crawl article %s: %s", article_id, exc)
+            return None
 
     async def crawl_all(self) -> list[ArticleData]:
+        """Fetch every discovered article, concurrently over one connection pool.
+
+        Previously this opened a fresh ``AsyncClient`` per article and awaited
+        them one at a time, so every article paid a full TCP+TLS handshake and
+        the whole crawl was serialised. One shared pool with bounded concurrency
+        keeps the KB from being hammered while cutting wall-clock substantially.
+        """
         article_ids = await self.discover_all_article_ids()
-        articles: list[ArticleData] = []
-        for article_id in sorted(article_ids, key=int):
-            article = await self.crawl_article(article_id)
-            if article and article.text:
-                articles.append(article)
-                logger.info("Crawled article %s: %s", article_id, article.title)
+        ordered = sorted(article_ids, key=int)
+        if not ordered:
+            return []
+
+        semaphore = asyncio.Semaphore(self.settings.crawl_concurrency)
+
+        async with self._new_client() as client:
+
+            async def fetch(article_id: str) -> Optional[ArticleData]:
+                async with semaphore:
+                    return await self.crawl_article(article_id, client=client)
+
+            results = await asyncio.gather(*(fetch(aid) for aid in ordered))
+
+        articles = [a for a in results if a and a.text]
+        for article in articles:
+            logger.info("Crawled article %s: %s", article.article_id, article.title)
+        logger.info("Crawled %d/%d articles with content", len(articles), len(ordered))
         return articles
