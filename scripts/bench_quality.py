@@ -35,6 +35,13 @@ sys.path.insert(0, ".")
 
 from scripts.eval_set import EVAL_QUERIES  # noqa: E402
 
+# Report order. Driven off the eval set rather than hardcoded so adding a query
+# class does not silently vanish from the summary — the previous hardcoded tuple
+# meant a new class was scored per-query but omitted from every aggregate.
+_KIND_ORDER = ["covered", "synonym", "typo", "partial", "offtopic"]
+KINDS = [k for k in _KIND_ORDER if any(k == kind for _, _, kind in EVAL_QUERIES)]
+KINDS += sorted({kind for _, _, kind in EVAL_QUERIES} - set(_KIND_ORDER))
+
 
 def _setup_logging() -> None:
     logging.basicConfig(level=logging.WARNING, format="%(levelname)s: %(message)s",
@@ -111,7 +118,7 @@ async def main() -> None:
     print()
     print("=" * 96)
     summary: dict = {}
-    for kind in ("covered", "partial", "offtopic"):
+    for kind in KINDS:
         group = [r for r in rows if r["kind"] == kind]
         if not group:
             continue
@@ -158,7 +165,7 @@ async def main() -> None:
         print(f"\nvs {compare_to}:")
         print(f"{'metric':<28} {'before':>9} {'after':>9} {'delta':>9}")
         print("-" * 58)
-        for kind in ("covered", "partial", "offtopic"):
+        for kind in KINDS:
             if kind not in summary or kind not in base["summary"]:
                 continue
             for metric in ("recall", "precision", "confidence"):

@@ -193,9 +193,18 @@ class Settings(BaseSettings):
     top_k_images: int = Field(default=3, alias="TOP_K_IMAGES")
 
     # MMR trade-off: 1.0 = pure relevance, 0.0 = pure diversity.
-    # Was 0.3, which weighted diversity 70/30 over relevance — backwards for
-    # help-desk QA, where the user wants the *most correct* passage first and
-    # diversity only matters for breaking up near-duplicate chunks.
+    #
+    # RETAINED FOR COMPATIBILITY, NO LONGER ON THE RETRIEVAL PATH. MMR used to
+    # select the cross-encoder shortlist; it now selects nothing, because
+    # optimising diversity *before* the only stage that judges relevance drops
+    # chunks that answer the question. Measured on this KB, replacing it with
+    # top-N by fused RRF rank moved recall@1 18/20 → 19/20 and recall@k 19/20 →
+    # 20/20 with off-topic leakage unchanged (see the Stage 4 comment in
+    # retriever.py). Redundancy is handled downstream instead, by exact-text
+    # dedup and by group_adjacent_chunks merging sibling chunks into one block.
+    #
+    # _mmr_select_vectorised is kept as a tested utility for callers that want a
+    # diversity-aware selection over an already-relevant set.
     mmr_diversity: float = Field(default=0.7, alias="MMR_DIVERSITY")
 
     # ------------------------------------------------------------------
@@ -215,12 +224,28 @@ class Settings(BaseSettings):
     # keeps any single engine's #1 hit from dominating the fused order.
     rrf_k: int = Field(default=60, alias="RRF_K")
 
-    # Candidates pulled from each engine before MMR/rerank narrow them down.
-    # Must exceed mmr_shortlist or MMR has nothing to choose between — the old
-    # code passed k == pool size, which made MMR a no-op.
-    retrieval_candidate_pool: int = Field(default=30, alias="RETRIEVAL_CANDIDATE_POOL")
-    # How many survive MMR and go to the (more expensive) cross-encoder.
-    mmr_shortlist: int = Field(default=12, alias="MMR_SHORTLIST")
+    # Candidates pulled from each engine before the shortlist narrows them down.
+    # Must exceed rerank_shortlist, or the shortlist is the whole pool and the
+    # wider retrieval buys nothing.
+    #
+    # 40 (was 30): multi-query retrieval unions candidates from several query
+    # variants, and the pool has to be wide enough that a chunk only the third
+    # variant found still gets in. Cost is bounded — widening the pool adds
+    # Chroma read time, not cross-encoder time, which is what actually dominates
+    # latency (the shortlist gates that).
+    retrieval_candidate_pool: int = Field(default=40, alias="RETRIEVAL_CANDIDATE_POOL")
+    # How many fused candidates go to the (more expensive) cross-encoder.
+    # 16 (was 12): a wider pool is pointless if the shortlist re-narrows it
+    # before the cross-encoder — which is the only stage that can tell a
+    # genuine answer from a vocabulary match — but this is the stage that costs
+    # real milliseconds, so it grows more conservatively than the pool.
+    #
+    # Named MMR_SHORTLIST historically, when MMR chose these. It is now a plain
+    # top-N cut of the fused RRF ranking; the env alias is kept so existing
+    # deployments do not silently fall back to the default.
+    rerank_shortlist: int = Field(
+        default=16, validation_alias=AliasChoices("RERANK_SHORTLIST", "MMR_SHORTLIST")
+    )
 
     # ------------------------------------------------------------------
     # Cross-encoder reranking
@@ -247,12 +272,84 @@ class Settings(BaseSettings):
     # Set to a large negative number (e.g. -1e9) to disable the gate.
     rerank_min_score: float = Field(default=-8.0, alias="RERANK_MIN_SCORE")
 
+    # Share of the final ORDERING given to the cross-encoder, the remainder going
+    # to the fused RRF rank. The gate above is unaffected — it is always the
+    # cross-encoder alone.
+    #
+    # Splitting these apart is the point: this model is excellent at judging
+    # whether a passage answers the question at all (it declines every genuinely
+    # off-topic query) and noisy at ranking two passages that both do. Measured
+    # on "Can't access LMS", ordering by its score alone put the Microsoft Teams
+    # chunk (+1.27) above the actual "How to login to LMS" chunk (-1.43) and
+    # pushed the right answer past top_k, while RRF had it at #1. Over 30
+    # paraphrase/synonym/typo queries, any blend recovered recall@k 29/30 → 30/30
+    # with off-topic precision unchanged; 0.5 is the midpoint rather than a value
+    # fitted to that set. 1.0 restores pure cross-encoder ordering.
+    rerank_order_weight: float = Field(default=0.5, alias="RERANK_ORDER_WEIGHT")
+
+    # How many phrasings of the question the cross-encoder scores, keeping the
+    # best score per chunk. This is a recall/precision dial, not a free win.
+    #
+    # This cross-encoder is very sensitive to surface wording: on this KB the
+    # same six login passages score +5.5/+7.6 for "LMS login" but -8.7/-10.8 for
+    # "Moodle login", because the article is titled "How to login to LMS". With
+    # one phrasing the gate is partly a test of whether the user guessed the
+    # article's own vocabulary.
+    #
+    # Measured over 21 on-topic and 8 off-topic queries:
+    #   1 form  → 19/21 on-topic (90.5%), 8/8 off-topic blocked
+    #   2 forms → 21/21 on-topic (100%),  8/8 off-topic blocked
+    #   3 forms → 21/21 on-topic,         6/8 off-topic ("weather tomorrow"
+    #             and "quantum entanglement" cleared the gate at -7.0/-7.1)
+    # Each extra phrasing is another attempt against a fixed threshold, so
+    # raising this past 2 buys nothing and costs off-topic precision.
+    rerank_query_forms: int = Field(default=2, alias="RERANK_QUERY_FORMS")
+
     # ------------------------------------------------------------------
     # Query preprocessing + retrieval cache
     # ------------------------------------------------------------------
     # Fuzzy-corrects domain terms ("smwol" → "smowl") against the KB vocabulary.
     # Purely local (difflib) — no LLM call, so it costs well under a millisecond.
     query_rewrite_enabled: bool = Field(default=True, alias="QUERY_REWRITE_ENABLED")
+
+    # --- Query preprocessing stages (see rag/query_processing.py) ---
+    # Each stage is separately switchable so a recall change can be attributed
+    # to one specific stage in the benchmark rather than to "preprocessing".
+    #
+    # Normalisation: lowercase, strip punctuation, correct spelling, expand
+    # abbreviations ("pwd" → "password"), canonicalise acronym casing.
+    query_normalization_enabled: bool = Field(
+        default=True, alias="QUERY_NORMALIZATION_ENABLED"
+    )
+    # Synonym expansion feeds BM25 ONLY. The vector query keeps the normalised
+    # text and the cross-encoder keeps the user's original wording — appending
+    # a bag of synonyms to either degrades it (see query_processing docstring).
+    query_synonym_expansion_enabled: bool = Field(
+        default=True, alias="QUERY_SYNONYM_EXPANSION_ENABLED"
+    )
+    # Multi-query: embed several paraphrases and fuse their rankings, so
+    # retrieval stops depending on the user's exact phrasing.
+    multi_query_enabled: bool = Field(default=True, alias="MULTI_QUERY_ENABLED")
+    # Paraphrases *in addition to* the normalised query. Each costs one
+    # embedding (~5-15ms local) plus one Chroma read; 4 keeps the whole
+    # preprocessing budget well inside the 3s latency target.
+    multi_query_variants: int = Field(default=4, alias="MULTI_QUERY_VARIANTS")
+    # Weight of a variant's ranking relative to the primary query's in RRF.
+    # Below 1.0 because a paraphrase is derived evidence: it should be able to
+    # rescue a chunk the original phrasing missed, but never outvote it.
+    multi_query_variant_weight: float = Field(
+        default=0.5, alias="MULTI_QUERY_VARIANT_WEIGHT"
+    )
+    # BM25 fuzzy token matching: map an out-of-vocabulary query token to its
+    # nearest *corpus* term before scoring. Catches typos the explicit
+    # correction map never enumerated.
+    lexical_fuzzy_enabled: bool = Field(default=True, alias="LEXICAL_FUZZY_ENABLED")
+
+    # Merge chunks from the same article into one context block, in document
+    # order, before the prompt is built. Adjacent chunks split mid-procedure
+    # otherwise arrive as disconnected fragments in arbitrary rerank order.
+    group_adjacent_chunks: bool = Field(default=True, alias="GROUP_ADJACENT_CHUNKS")
+
     # Seconds to cache a full retrieval result keyed by normalised query.
     retrieval_cache_ttl: int = Field(default=300, alias="RETRIEVAL_CACHE_TTL")
     retrieval_cache_size: int = Field(default=256, alias="RETRIEVAL_CACHE_SIZE")
