@@ -17,6 +17,7 @@ Two roles here, both local and cheap:
 
 import difflib
 import re
+import threading
 from functools import lru_cache
 from typing import Optional
 
@@ -84,24 +85,38 @@ class LexicalIndex:
         self._corpus_tokens: list[list[str]] = []
         self._bm25: Optional[BM25Okapi] = None
         self._vocabulary: Optional[frozenset[str]] = None
+        # Guards the swap in :meth:`rebuild` against readers in :meth:`search`.
+        # Under concurrent load the index is built lazily on the query path, so
+        # without this N simultaneous first-queries each run a full Chroma scan
+        # plus BM25 build, and a reader can observe ``_bm25`` from the new
+        # corpus alongside ``_corpus_ids`` from the old one — which maps scores
+        # onto the wrong chunk ids, or raises IndexError when the corpus shrank.
+        self._lock = threading.RLock()
 
     @property
     def loaded(self) -> bool:
         return self._bm25 is not None
 
     def rebuild(self) -> None:
+        """Rebuild the index from Chroma, publishing the result atomically.
+
+        Everything is computed into locals first and swapped in under the lock
+        as one step, so a concurrent :meth:`search` sees either the whole old
+        index or the whole new one, never a mix of the two.
+        """
         data = fetch_all_text_documents()
         ids = data["ids"]
         documents = data["documents"]
         metadatas = data["metadatas"]
         if not ids:
             logger.warning("LexicalIndex.rebuild: no text documents in Chroma")
-            self._bm25 = None
+            with self._lock:
+                self._bm25 = None
             return
 
-        self._corpus_ids = ids
-        self._corpus_docs = [doc or "" for doc in documents]
-        self._corpus_meta = {
+        corpus_ids = ids
+        corpus_docs = [doc or "" for doc in documents]
+        corpus_meta = {
             cid: meta or {} for cid, meta in zip(ids, metadatas)
         }
 
@@ -121,8 +136,8 @@ class LexicalIndex:
         # a title match should outrank an incidental body mention, not
         # dominate a chunk that genuinely answers the question.
         weighted: list[str] = []
-        for cid, doc in zip(self._corpus_ids, self._corpus_docs):
-            meta = self._corpus_meta[cid]
+        for cid, doc in zip(corpus_ids, corpus_docs):
+            meta = corpus_meta[cid]
             parts = [doc]
             # Title comes from the chunk's own [Title] header, not metadata —
             # Chroma does not carry it (see _FIELD_WEIGHTS).
@@ -146,12 +161,22 @@ class LexicalIndex:
                 parts.append(" ".join(aliases))
             weighted.append(" ".join(parts))
 
-        self._corpus_tokens = [tokenize(d) for d in weighted]
-        self._bm25 = BM25Okapi(self._corpus_tokens)
-        self._vocabulary = None  # invalidated with the corpus
+        corpus_tokens = [tokenize(d) for d in weighted]
+        bm25 = BM25Okapi(corpus_tokens)
+
+        # Single atomic publish: readers hold the lock for the duration of a
+        # search, so none of them can be midway through scoring when this runs.
+        with self._lock:
+            self._corpus_ids = corpus_ids
+            self._corpus_docs = corpus_docs
+            self._corpus_meta = corpus_meta
+            self._corpus_tokens = corpus_tokens
+            self._bm25 = bm25
+            self._vocabulary = None  # invalidated with the corpus
+
         logger.info(
             "LexicalIndex rebuilt over %d chunks (fields=%s)",
-            len(self._corpus_ids),
+            len(corpus_ids),
             ",".join(_FIELD_WEIGHTS),
         )
 
@@ -161,9 +186,16 @@ class LexicalIndex:
         Called from the query path, so a fresh process (or one whose cache was
         invalidated by a re-ingest) transparently rebuilds instead of silently
         returning no lexical hits.
+
+        Double-checked under the lock: the first check is the uncontended fast
+        path taken by every warm query, and the second stops N concurrent
+        first-queries from each paying the full Chroma scan and BM25 build.
         """
-        if self._bm25 is None:
-            self.rebuild()
+        if self._bm25 is not None:
+            return
+        with self._lock:
+            if self._bm25 is None:
+                self.rebuild()
 
     def search(
         self, query: str, k: int = 20, fuzzy: bool = True
@@ -185,8 +217,6 @@ class LexicalIndex:
         if not query.strip():
             return []
         self.ensure_loaded()
-        if self._bm25 is None:
-            return []
 
         tokens = tokenize(query)
         if fuzzy:
@@ -194,18 +224,26 @@ class LexicalIndex:
         if not tokens:
             return []
 
-        scores = self._bm25.get_scores(tokens)
-        ranked = sorted(
-            range(len(scores)), key=lambda i: scores[i], reverse=True
-        )
-        # Skip zero-scoring tail — no lexical overlap at all.
-        results: list[tuple[str, float]] = []
-        for idx in ranked:
-            if scores[idx] <= 0.0:
-                continue
-            results.append((self._corpus_ids[idx], float(scores[idx])))
-            if len(results) >= k:
-                break
+        # Scoring and the id lookup that interprets it must see one consistent
+        # corpus, so both happen under the lock. BM25 over a KB this size is
+        # pure arithmetic in the low milliseconds with no I/O, so holding the
+        # lock across it costs far less than the torn read it prevents.
+        with self._lock:
+            if self._bm25 is None:
+                return []
+            scores = self._bm25.get_scores(tokens)
+            corpus_ids = self._corpus_ids
+            ranked = sorted(
+                range(len(scores)), key=lambda i: scores[i], reverse=True
+            )
+            # Skip zero-scoring tail — no lexical overlap at all.
+            results: list[tuple[str, float]] = []
+            for idx in ranked:
+                if scores[idx] <= 0.0:
+                    continue
+                results.append((corpus_ids[idx], float(scores[idx])))
+                if len(results) >= k:
+                    break
         return results
 
     def _fuzzy_tokens(self, tokens: list[str]) -> list[str]:
@@ -243,15 +281,22 @@ class LexicalIndex:
         self.ensure_loaded()
         if self._vocabulary is not None:
             return self._vocabulary
-        vocab: set[str] = set()
-        # _corpus_tokens is the *weighted* document set, so titles, categories,
-        # summaries, keywords and aliases are all already present.
-        for tokens in self._corpus_tokens:
-            for word in tokens:
-                if len(word) >= 3:
-                    vocab.add(word)
-        self._vocabulary = frozenset(vocab)
-        return self._vocabulary
+        # Built under the lock against the same corpus snapshot `rebuild` sets
+        # `_vocabulary = None` for; otherwise a rebuild landing mid-loop would
+        # have its invalidation overwritten by the stale set computed here.
+        with self._lock:
+            if self._vocabulary is not None:
+                return self._vocabulary
+            vocab: set[str] = set()
+            # _corpus_tokens is the *weighted* document set, so titles,
+            # categories, summaries, keywords and aliases are all already
+            # present.
+            for tokens in self._corpus_tokens:
+                for word in tokens:
+                    if len(word) >= 3:
+                        vocab.add(word)
+            self._vocabulary = frozenset(vocab)
+            return self._vocabulary
 
 
 @lru_cache(maxsize=1)

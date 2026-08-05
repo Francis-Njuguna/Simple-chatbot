@@ -65,6 +65,25 @@ Source: {url}
 {summary}Content: {text}
 ---"""
 
+# Article-centric context block. One block per retrieved article rather than one
+# per chunk: the title, category, summary and source URL are facts about the
+# *article*, so repeating them once per excerpt wastes prompt budget and reads
+# to the model as several different sources saying the same thing.
+#
+# `body` holds the article's excerpts already merged and ordered by
+# `_group_adjacent`, so a procedure split across chunks arrives as one
+# continuous numbered sequence instead of fragments the model has to re-stitch.
+ARTICLE_CONTEXT_TEMPLATE = """--- Article {n}: {title}
+Category: {category}
+{summary}{body}
+Source: {url}
+---"""
+
+# Separates excerpts that are NOT adjacent within the same article. Chunks 2
+# and 7 have real content missing between them; an explicit marker stops the
+# model reading them as one uninterrupted procedure.
+CONTEXT_GAP_MARKER = "[…]"
+
 # Rendered above the image list when the retriever returned images. The images
 # themselves are rendered by the client below the answer — the model only needs
 # to know they exist so it can refer to them instead of describing steps blind.

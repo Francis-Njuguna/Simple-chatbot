@@ -32,7 +32,14 @@ from slowapi.errors import RateLimitExceeded
 # Shared limiter singleton – defined in a dedicated leaf module so that route
 # handlers can import it without creating a circular dependency on main.py.
 from backend.app.core.limiter import limiter  # noqa: E402  (must precede router imports)
-from backend.app.api.routes import auth, chat, feedback, history, ingest
+from backend.app.api.routes import (
+    auth,
+    chat,
+    feedback,
+    history,
+    ingest,
+    observability,
+)
 from backend.app.config import get_settings
 from backend.app.database.session import init_db
 from backend.app.utils.exceptions import AppError, app_error_to_http
@@ -221,6 +228,9 @@ app.include_router(chat.router, prefix=api_prefix)
 app.include_router(feedback.router, prefix=api_prefix)
 app.include_router(ingest.router, prefix=api_prefix)
 app.include_router(history.router, prefix=api_prefix)
+# Deliberately NOT under api_prefix: scrapers conventionally expect /metrics at
+# the root, and Prometheus/OTel default scrape configs assume that path.
+app.include_router(observability.router)
 
 # ---------------------------------------------------------------------------
 # Global exception handler

@@ -208,7 +208,7 @@ async def main() -> int:
 
     async with async_session_factory() as db:
         for query, expected in SMOKE_QUERIES:
-            chunks, _images = await retriever.retrieve(query, db=db)
+            chunks, _images, _processed = await retriever.retrieve(query, db=db)
             blob = " ".join(ch.text for ch in chunks).lower()
             hit = expected.lower() in blob
             c.check(
@@ -219,7 +219,7 @@ async def main() -> int:
             )
 
         print("\n=== 5. Negative control (must retrieve nothing) ===", flush=True)
-        chunks, _ = await retriever.retrieve(NEGATIVE_QUERY, db=db)
+        chunks, _, _ = await retriever.retrieve(NEGATIVE_QUERY, db=db)
         c.check(
             not chunks,
             f"off-topic query returns no context: {NEGATIVE_QUERY!r}",

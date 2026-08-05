@@ -43,196 +43,52 @@ from functools import lru_cache
 from typing import Iterable, Optional
 
 from backend.app.utils.logging import get_logger
+from backend.app.rag.domain_knowledge import get_domain_knowledge
 
 logger = get_logger(__name__)
 
 
 # ---------------------------------------------------------------------------
-# Domain synonym groups
+# Domain knowledge — loaded from config/domain_knowledge.yaml
 # ---------------------------------------------------------------------------
-# Each list holds terms that refer to the same thing *in this knowledge base*.
-# "LMS" and "Moodle" are not dictionary synonyms; here they name one system, and
-# a user typing either must reach article 1. Groups are intentionally generous —
-# the cross-encoder gate downstream removes anything that does not actually
-# answer the question, so over-inclusion costs recall nothing and precision
-# nothing.
+# The tables that used to be hardcoded here (SYNONYM_GROUPS, ABBREVIATIONS,
+# ACRONYMS, SPELL_CORRECTIONS, INTENT_PATTERNS) now live in
+# backend/app/rag/domain_knowledge.py as built-in defaults, overlaid by
+# config/domain_knowledge.yaml at load time. Behaviour with no YAML present is
+# byte-identical to before, which is what makes this a safe swap.
 #
-# Order matters only for display: the first entry is treated as the canonical
-# form when logging an expansion.
-SYNONYM_GROUPS: list[list[str]] = [
-    # --- Systems and platforms ---
-    ["LMS", "Moodle", "Learning Management System", "learning platform", "e-learning"],
-    ["Student Portal", "portal", "SIS", "student information system", "student system"],
-    [
-        "MFA", "Microsoft Authenticator", "authenticator", "2FA",
-        "two-factor authentication", "multi-factor authentication",
-        "multifactor authentication", "authenticator app", "verification app",
-    ],
-    [
-        "student email", "university email", "corporate email", "Outlook",
-        "Microsoft 365 email", "M365 email", "Office 365 email",
-        "official email", "mcampus email", "campus email",
-    ],
-    [
-        "VAS", "Virtual Assessment System", "assessment platform",
-        "assessment system", "exam system", "online exam", "online examination",
-    ],
-    [
-        "SMOWL", "proctoring", "online exam monitoring", "screen monitoring",
-        "proctoring software", "exam monitoring", "proctored exam",
-        "remote proctoring", "exam supervision",
-    ],
-    ["Microsoft Teams", "Teams", "MS Teams"],
-    ["My Loft", "MyLoft", "library resources", "digital library"],
-    ["help desk", "helpdesk", "support", "IT support", "technical support"],
-
-    # --- Actions and intents ---
-    ["login", "log in", "sign in", "signin", "log on", "logon", "access"],
-    ["password", "passcode", "login credentials", "credentials"],
-    ["reset", "recover", "change", "retrieve", "forgot"],
-    ["register", "registration", "enroll", "enrolment", "enrollment", "sign up"],
-    ["exam", "examination", "test", "assessment"],
-    ["supplementary exam", "special exam", "resit", "retake"],
-    ["camera", "webcam", "cam", "video"],
-    ["grades", "marks", "results", "scores", "transcript"],
-    ["setup", "set up", "configure", "install", "installation"],
-]
-
-
-# Token → canonical expansion, applied before synonym lookup. These are
-# abbreviations and clippings, not misspellings: the user meant to type them.
-ABBREVIATIONS: dict[str, str] = {
-    "pwd": "password",
-    "pass": "password",
-    "pw": "password",
-    "auth": "authentication",
-    "authn": "authentication",
-    "cam": "camera",
-    "acct": "account",
-    "acc": "account",
-    "reg": "registration",
-    "info": "information",
-    "admin": "administrator",
-    "uni": "university",
-    "msg": "message",
-    "config": "configuration",
-    "docs": "documentation",
-    "app": "application",
-    "num": "number",
-    "id": "identification",
-    "faq": "frequently asked questions",
-    "kb": "knowledge base",
-    "sms": "text message",
-}
-
-
-# Acronyms that must survive normalization intact and in canonical casing. BM25
-# matches exact tokens, so "smowl" and "SMOWL" must not be two different things.
-ACRONYMS: dict[str, str] = {
-    "lms": "LMS",
-    "vas": "VAS",
-    "mfa": "MFA",
-    "2fa": "2FA",
-    "sis": "SIS",
-    "smowl": "SMOWL",
-    "m365": "M365",
-    "amiu": "AmIU",
-    "it": "IT",
-    "ms": "MS",
-    "pdf": "PDF",
-    "otp": "OTP",
-}
-
-
-# Observed (and next-most-likely) misspellings of domain terms, mapped to the
-# canonical form. Fuzzy matching cannot reach these reliably: "smwol" is a
-# transposition at SequenceMatcher ratio 0.80 and "moddle" one edit at 0.83 —
-# both below any bar loose enough to be safe for ordinary words. An explicit map
-# is both safer and faster than lowering the fuzzy threshold.
-SPELL_CORRECTIONS: dict[str, str] = {
-    # SMOWL
-    "smwol": "SMOWL", "swoml": "SMOWL", "swowl": "SMOWL", "smowll": "SMOWL",
-    "smowel": "SMOWL", "smol": "SMOWL", "smowl": "SMOWL", "smowal": "SMOWL",
-    # Moodle
-    "moddle": "Moodle", "modle": "Moodle", "moodel": "Moodle",
-    "mooddle": "Moodle", "moodle": "Moodle", "muddle": "Moodle",
-    # Authenticator
-    "athenticator": "authenticator", "authentificator": "authenticator",
-    "autheticator": "authenticator", "authenicator": "authenticator",
-    "authenticater": "authenticator", "athenticater": "authenticator",
-    # Password
-    "pasword": "password", "paswword": "password", "passwrod": "password",
-    "passowrd": "password", "pssword": "password", "passwd": "password",
-    # Portal
-    "protal": "portal", "porta": "portal", "portall": "portal",
-    # Microsoft
-    "micorsoft": "Microsoft", "microsft": "Microsoft", "mircosoft": "Microsoft",
-    # Outlook
-    "outllok": "Outlook", "otlook": "Outlook", "outlok": "Outlook",
-    # Login
-    "logn": "login", "loign": "login", "lgoin": "login",
-    # Exam
-    "exame": "exam", "exm": "exam", "examm": "exam",
-    # Register
-    "registor": "register", "regsiter": "register", "reigster": "register",
-    # Teams
-    "taems": "Teams", "tems": "Teams",
-    # Supplementary
-    "suplementary": "supplementary", "supplimentary": "supplementary",
-}
-
-
-# Intent patterns → canonical phrasings. This is what makes "can't login",
-# "unable to access", "where do I sign in" and "login problem" retrieve the same
-# article: each matches the login-trouble intent and contributes the same
-# canonical variants, regardless of how the user phrased it.
+# They stay importable from this module under their old names via PEP 562
+# module __getattr__. That is deliberate rather than a plain assignment: an
+# import-time read would snapshot the tables before the config path is known,
+# and would defeat reload_domain_knowledge() at runtime. Resolving on attribute
+# access means `from ... import SYNONYM_GROUPS` always sees current data.
 #
-# (compiled pattern, [canonical phrasings to add as variants])
-INTENT_PATTERNS: list[tuple[re.Pattern[str], list[str]]] = [
-    (
-        re.compile(r"\b(forgot|lost|forgotten|don'?t remember|cannot remember)\b.*\b(password|pwd|passcode)\b|"
-                   r"\b(password|pwd)\b.*\b(forgot|lost|reset|recover|change)\b", re.I),
-        ["How do I reset my password?", "password reset steps", "recover forgotten password"],
-    ),
-    (
-        re.compile(r"\b(can'?t|cannot|unable to|couldn'?t|failed to|having (trouble|issues?|problems?))\b.*"
-                   r"\b(log ?in|log ?on|sign ?in|access|get in|enter)\b|"
-                   r"\b(login|log ?in|sign ?in)\b.*\b(problem|issue|error|trouble|fail(ed|ure)?|not working)\b",
-                   re.I),
-        ["How do I log in?", "login troubleshooting", "cannot sign in to my account"],
-    ),
-    (
-        re.compile(r"\bwhere\b.*\b(do|can|should)\b.*\b(i|we)\b.*\b(log ?in|sign ?in|access|find)\b", re.I),
-        ["How do I log in?", "where to sign in", "login page location"],
-    ),
-    (
-        re.compile(r"\b(how|steps?|guide|instructions?|procedure|process)\b.*\b(set ?up|setup|configure|install)\b", re.I),
-        ["setup instructions", "configuration steps", "how to set up"],
-    ),
-    (
-        re.compile(r"\b(camera|webcam|cam|microphone|mic)\b.*\b(not working|fail(ed|ing)?|issue|problem|error|black|blank)\b|"
-                   r"\b(not working|problem|issue)\b.*\b(camera|webcam|cam)\b", re.I),
-        ["camera not working during exam", "webcam troubleshooting", "fix camera detection"],
-    ),
-    (
-        re.compile(r"\b(what is|what'?s|explain|describe|tell me about|meaning of)\b", re.I),
-        ["overview and explanation", "what it is and how it works"],
-    ),
-    (
-        re.compile(r"\b(register|registration|enroll|sign ?up)\b.*\b(exam|examination|test|assessment|course|unit)\b|"
-                   r"\b(exam|examination)\b.*\b(register|registration|enroll)\b", re.I),
-        ["How do I register for exams?", "exam registration process"],
-    ),
-    (
-        re.compile(r"\b(contact|reach|call|speak to|talk to|get help from)\b.*"
-                   r"\b(help ?desk|support|IT|admin|administrator|staff)\b", re.I),
-        ["How do I contact the help desk?", "support contact details"],
-    ),
-]
+# lexical.py imports SYNONYM_GROUPS inside a function body (to break a circular
+# import) and gets `list[list[str]]`, exactly as before.
+
+_LAZY_TABLES = {
+    "SYNONYM_GROUPS": lambda k: k.legacy_groups,
+    "ABBREVIATIONS": lambda k: dict(k.abbreviations),
+    "ACRONYMS": lambda k: dict(k.acronyms),
+    "SPELL_CORRECTIONS": lambda k: dict(k.spell_corrections),
+    "INTENT_PATTERNS": lambda k: [(r.patterns[0], list(r.phrasings)) for r in k.intents],
+}
+
+
+def __getattr__(name: str):
+    """Resolve the legacy table names against the loaded domain knowledge."""
+    accessor = _LAZY_TABLES.get(name)
+    if accessor is None:
+        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+    return accessor(get_domain_knowledge())
+
+
+def __dir__() -> list[str]:
+    return sorted([*globals(), *_LAZY_TABLES])
 
 
 # ---------------------------------------------------------------------------
-# Derived lookup tables — built once
+# Derived lookup tables — built once from loaded domain knowledge
 # ---------------------------------------------------------------------------
 
 @lru_cache(maxsize=1)
@@ -242,14 +98,7 @@ def _synonym_lookup() -> dict[str, tuple[str, ...]]:
     A term may appear in more than one group ("access" is both a login verb and
     a generic action); its expansion is the union of all groups containing it.
     """
-    lookup: dict[str, set[str]] = {}
-    for group in SYNONYM_GROUPS:
-        for term in group:
-            key = term.lower()
-            lookup.setdefault(key, set()).update(
-                other for other in group if other.lower() != key
-            )
-    return {key: tuple(sorted(vals)) for key, vals in lookup.items()}
+    return get_domain_knowledge().synonym_lookup
 
 
 @lru_cache(maxsize=1)
@@ -260,16 +109,7 @@ def _multiword_terms() -> tuple[tuple[str, ...], ...]:
     single-token ones or "system" alone would swallow the phrase and expand to
     the wrong group.
     """
-    phrases = [
-        tuple(t.lower().split())
-        for group in SYNONYM_GROUPS
-        for t in group
-        if " " in t or "-" in t
-    ]
-    # Hyphens split too, so "two-factor authentication" matches "two factor
-    # authentication" as typed.
-    normalised = [tuple(" ".join(p).replace("-", " ").split()) for p in phrases]
-    return tuple(sorted(set(normalised), key=len, reverse=True))
+    return get_domain_knowledge().phrases
 
 
 # Punctuation to strip. Apostrophes and intra-word hyphens survive so "student's"
@@ -298,6 +138,23 @@ class ProcessedQuery:
         embedded and searched separately; results are fused.
     corrections / expansions / intents:
         Diagnostics for the debug log — what the pipeline actually changed.
+    entities:
+        Canonical names of the systems the query is about ("Moodle LMS",
+        "Microsoft Authenticator"). This is what makes the Objective-1 collapse
+        observable: every phrasing of "moddle" / "lms" / "course portal"
+        produces the same single entity, so a benchmark can assert that
+        synonymous queries were *understood* identically, not merely that they
+        happened to retrieve the same chunks.
+    intent_names:
+        Names of the matched intent rules ("password_reset"). Drives ranking
+        boosts and adaptive top_k. ``intents`` remains the human-readable
+        canonical phrasing, kept for the existing debug output.
+    boost_terms:
+        Union of the boost vocabularies of every matched intent, lowercased.
+        Consumed by the retriever's ordering stage — a boost, never a filter.
+    procedural:
+        True when a matched intent expects a multi-step answer. Drives the
+        larger adaptive top_k so a numbered procedure is not truncated.
     """
 
     original: str
@@ -307,10 +164,25 @@ class ProcessedQuery:
     corrections: dict[str, str] = field(default_factory=dict)
     expansions: dict[str, tuple[str, ...]] = field(default_factory=dict)
     intents: list[str] = field(default_factory=list)
+    entities: list[str] = field(default_factory=list)
+    intent_names: list[str] = field(default_factory=list)
+    boost_terms: tuple[str, ...] = ()
+    procedural: bool = False
 
     @property
     def changed(self) -> bool:
         return bool(self.corrections or self.expansions or self.intents)
+
+    @property
+    def understood(self) -> bool:
+        """Whether the layer recognised anything domain-specific.
+
+        Used by the dynamic threshold: a query we understood (known entity or
+        intent) has earned a slightly more permissive gate, because the reason
+        its cosine score is mediocre is usually vocabulary mismatch we have
+        already corrected for — not that it is off-topic.
+        """
+        return bool(self.entities or self.intent_names)
 
 
 # ---------------------------------------------------------------------------
@@ -335,6 +207,14 @@ def normalize_query(
     if not query or not query.strip():
         return "", {}
 
+    # Read the tables through the singleton rather than the module-level names:
+    # PEP 562 __getattr__ fires on `module.NAME` from outside, not on a bare
+    # global read inside the module, so the legacy names are unavailable here.
+    knowledge = get_domain_knowledge()
+    spell_corrections = knowledge.spell_corrections
+    acronyms = knowledge.acronyms
+    abbreviations = knowledge.abbreviations
+
     corrections: dict[str, str] = {}
 
     # Strip punctuation first so "moodle?" and "moodle" normalise identically.
@@ -349,21 +229,21 @@ def normalize_query(
             continue
 
         # 1. Explicit spelling correction (highest confidence).
-        if key in SPELL_CORRECTIONS:
-            fixed = SPELL_CORRECTIONS[key]
+        if key in spell_corrections:
+            fixed = spell_corrections[key]
             if fixed.lower() != key:
                 corrections[raw_token] = fixed
             out.append(fixed)
             continue
 
         # 2. Acronym canonicalisation — casing only, never a content change.
-        if key in ACRONYMS:
-            out.append(ACRONYMS[key])
+        if key in acronyms:
+            out.append(acronyms[key])
             continue
 
         # 3. Abbreviation expansion ("pwd" → "password").
-        if key in ABBREVIATIONS:
-            expanded = ABBREVIATIONS[key]
+        if key in abbreviations:
+            expanded = abbreviations[key]
             corrections[raw_token] = expanded
             out.append(expanded)
             continue
@@ -467,11 +347,11 @@ def generate_variants(
     normalized: str,
     expansions: dict[str, tuple[str, ...]],
     max_variants: int = 4,
-) -> tuple[list[str], list[str]]:
+) -> tuple[list[str], list[str], list[str], tuple[str, ...], bool]:
     """Build deterministic semantic paraphrases of ``normalized``.
 
-    Returns ``(variants, matched_intents)``. ``variants[0]`` is always
-    ``normalized`` so the caller can search the list uniformly.
+    Returns ``(variants, intent_display_names, intent_names, boost_terms, procedural)``.
+    ``variants[0]`` is always ``normalized`` so the caller can search uniformly.
 
     Three sources, in priority order:
 
@@ -490,11 +370,15 @@ def generate_variants(
     All are string operations: no LLM, no network, reproducible run to run.
     """
     if not normalized:
-        return [], []
+        return [], [], [], (), False
 
+    knowledge = get_domain_knowledge()
     variants: list[str] = [normalized]
     seen = {normalized.lower()}
-    intents: list[str] = []
+    intent_display: list[str] = []
+    intent_names: list[str] = []
+    boost_set: set[str] = set()
+    procedural = False
 
     def add(candidate: str) -> None:
         cand = candidate.strip()
@@ -506,11 +390,15 @@ def generate_variants(
         variants.append(cand)
 
     # 1. Intent-based canonical phrasings.
-    for pattern, phrasings in INTENT_PATTERNS:
-        if pattern.search(normalized):
-            intents.append(phrasings[0])
-            for phrasing in phrasings:
-                add(phrasing)
+    matched_intents = knowledge.classify_intents(normalized)
+    for rule in matched_intents:
+        intent_display.append(rule.phrasings[0] if rule.phrasings else rule.name)
+        intent_names.append(rule.name)
+        boost_set.update(t.lower() for t in rule.boost)
+        if rule.procedural:
+            procedural = True
+        for phrasing in rule.phrasings:
+            add(phrasing)
 
     # 2. Synonym substitution — one coherent rewrite per matched term, using the
     # group's canonical (first-listed) form. Prefer expanding acronyms to their
@@ -534,16 +422,37 @@ def generate_variants(
         add(f"How do I use {normalized}?")
         add(f"What is {normalized}?")
 
-    return variants[: max_variants + 1], intents
+    return (variants[: max_variants + 1], intent_display, intent_names,
+            tuple(sorted(boost_set)), procedural)
+
+
+def extract_entities(normalized: str) -> list[str]:
+    """Canonical names of the systems ``normalized`` is about.
+
+    This is the observable form of Objective 1's collapse: "moddle", "lms",
+    "learning portal" and "course portal" all return ``["Moodle LMS"]``, so a
+    test can assert that synonymous queries were *understood* the same way
+    rather than inferring it from whichever chunks happened to come back.
+
+    Only ``system`` groups count — see :attr:`SynonymGroup.is_entity`. Order is
+    by first appearance in the query, and duplicates collapse, so a query
+    mentioning "LMS" and "Moodle" yields one entity, not two.
+    """
+    knowledge = get_domain_knowledge()
+    entities: list[str] = []
+    for match in knowledge.match_terms(normalized):
+        if not match.group.is_entity:
+            continue
+        if match.group.canonical not in entities:
+            entities.append(match.group.canonical)
+    return entities
 
 
 def _canonical_for(term: str) -> Optional[str]:
-    """First-listed term of the first group containing ``term``."""
-    low = term.lower()
-    for group in SYNONYM_GROUPS:
-        if any(t.lower() == low for t in group):
-            return group[0]
-    return None
+    """First-listed term (rewrite form) of the first group containing ``term``."""
+    knowledge = get_domain_knowledge()
+    group = knowledge.group_for(term)
+    return group.rewrite_form if group else None
 
 
 def _substitute(text: str, term: str, replacement: str) -> str:
@@ -583,9 +492,15 @@ def process_query(
         lexical, expansions = normalized, {}
 
     if enable_multi_query:
-        variants, intents = generate_variants(normalized, expansions, max_variants)
+        variants, intents, intent_names, boost_terms, procedural = generate_variants(
+            normalized, expansions, max_variants
+        )
     else:
-        variants, intents = ([normalized] if normalized else []), []
+        variants, intents, intent_names, boost_terms, procedural = (
+            [normalized] if normalized else [], [], [], (), False
+        )
+
+    entities = extract_entities(normalized) if normalized else []
 
     processed = ProcessedQuery(
         original=original,
@@ -595,6 +510,10 @@ def process_query(
         corrections=corrections,
         expansions=expansions,
         intents=intents,
+        entities=entities,
+        intent_names=intent_names,
+        boost_terms=boost_terms,
+        procedural=procedural,
     )
 
     if processed.changed:

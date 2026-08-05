@@ -1,0 +1,455 @@
+# Amref Help Desk — domain knowledge for retrieval.
+#
+# WHAT THIS FILE IS FOR
+# ---------------------
+# Retrieval quality for this knowledge base rests on facts no embedding model
+# knows: that "LMS" and "Moodle" name one system *here*, that "SMOWL" is the
+# proctoring tool, that a user typing "smwol" meant it. Those facts change as
+# the KB grows and are maintained by whoever runs the help desk — so they live
+# here, not in Python.
+#
+# Edit this file and restart (or POST /api/admin/reload-domain-knowledge) — no
+# code change, no redeploy of the retrieval logic.
+#
+# EVERY SECTION IS OPTIONAL. Whatever you omit falls back to the built-in
+# defaults in backend/app/rag/domain_knowledge.py, so deleting this file leaves
+# the system working exactly as it did before it existed.
+#
+# HOW MERGING WORKS
+#   synonyms          — merged by group id. A group id present here REPLACES the
+#                       built-in group of that id; a new id is added.
+#   abbreviations     — merged key by key (this file wins).
+#   acronyms          — merged key by key (this file wins).
+#   spell_corrections — merged key by key (this file wins).
+#   intents           — merged by intent name (this file wins).
+
+version: 1
+
+# ---------------------------------------------------------------------------
+# SYNONYM GROUPS — also the entity dictionary
+# ---------------------------------------------------------------------------
+# A group is a set of surface forms that mean ONE thing in this KB. It does
+# double duty:
+#
+#   * synonym expansion — every term is appended to the BM25 query, so "LMS
+#     login" reaches a chunk whose title only says "Moodle".
+#   * entity extraction — matching any term means the query is ABOUT this
+#     entity, reported as `canonical`. This is what makes "moddle", "lms",
+#     "learning portal" and "course portal" all resolve to "Moodle LMS".
+#
+# Fields
+#   canonical : the entity's display name. Reported in traces and metrics.
+#               NOT used for query rewriting — see `terms` below.
+#   kind      : system | action | object. Only `system` groups are treated as
+#               entities strong enough to steer intent boosting.
+#   terms     : all surface forms. ORDER MATTERS: terms[0] is the form used
+#               when rewriting a query variant ("lms login" -> "LMS login").
+#               It is deliberately the KB's own preferred wording, which is
+#               often shorter than `canonical`. Reordering this list changes
+#               measured recall — see the variant-order note in retriever.py.
+
+synonyms:
+  lms:
+    canonical: Moodle LMS
+    kind: system
+    terms:
+      - LMS
+      - Moodle
+      - Learning Management System
+      - learning platform
+      - e-learning
+      - learning portal
+      - course portal
+
+  student_portal:
+    canonical: Student Portal
+    kind: system
+    terms:
+      - Student Portal
+      - portal
+      - SIS
+      - student information system
+      - student system
+      - portal login
+      - student account
+
+  mfa:
+    canonical: Microsoft Authenticator
+    kind: system
+    terms:
+      - MFA
+      - Microsoft Authenticator
+      - authenticator
+      - 2FA
+      - two-factor authentication
+      - multi-factor authentication
+      - multifactor authentication
+      - authenticator app
+      - verification app
+
+  email:
+    canonical: University Email
+    kind: system
+    terms:
+      - student email
+      - university email
+      - corporate email
+      - Outlook
+      - Microsoft 365 email
+      - M365 email
+      - Office 365 email
+      - official email
+      - mcampus email
+      - campus email
+
+  vas:
+    canonical: Virtual Assessment System
+    kind: system
+    terms:
+      - VAS
+      - Virtual Assessment System
+      - assessment platform
+      - assessment system
+      - exam system
+      - online exam
+      - online examination
+
+  smowl:
+    canonical: SMOWL Proctoring
+    kind: system
+    terms:
+      - SMOWL
+      - proctoring
+      - online exam monitoring
+      - screen monitoring
+      - proctoring software
+      - exam monitoring
+      - proctored exam
+      - remote proctoring
+      - exam supervision
+      - camera monitoring
+
+  teams:
+    canonical: Microsoft Teams
+    kind: system
+    terms:
+      - Microsoft Teams
+      - Teams
+      - MS Teams
+
+  myloft:
+    canonical: My Loft
+    kind: system
+    terms:
+      - My Loft
+      - MyLoft
+      - library resources
+      - digital library
+
+  helpdesk:
+    canonical: Help Desk
+    kind: system
+    terms:
+      - help desk
+      - helpdesk
+      - support
+      - IT support
+      - technical support
+
+  # --- actions and objects -------------------------------------------------
+  # These carry no entity weight on their own (a query about "login" is not
+  # about a system), but they are what makes paraphrase collapse work.
+
+  login:
+    canonical: Login
+    kind: action
+    terms: [login, log in, sign in, signin, log on, logon, access]
+
+  password:
+    canonical: Password
+    kind: object
+    terms: [password, passcode, login credentials, credentials]
+
+  reset:
+    canonical: Reset
+    kind: action
+    terms: [reset, recover, change, retrieve, forgot]
+
+  register:
+    canonical: Registration
+    kind: action
+    terms: [register, registration, enroll, enrolment, enrollment, sign up]
+
+  exam:
+    canonical: Exam
+    kind: object
+    terms: [exam, examination, test, assessment]
+
+  supplementary_exam:
+    canonical: Supplementary Exam
+    kind: object
+    terms: [supplementary exam, special exam, resit, retake]
+
+  camera:
+    canonical: Camera
+    kind: object
+    terms: [camera, webcam, cam, video]
+
+  grades:
+    canonical: Grades
+    kind: object
+    terms: [grades, marks, results, scores, transcript]
+
+  setup:
+    canonical: Setup
+    kind: action
+    terms: [setup, set up, configure, install, installation]
+
+# ---------------------------------------------------------------------------
+# ABBREVIATIONS — clippings the user MEANT to type. Expanded during
+# normalisation, so they reach both the vector query and BM25.
+# ---------------------------------------------------------------------------
+abbreviations:
+  pwd: password
+  pass: password
+  pw: password
+  auth: authentication
+  authn: authentication
+  cam: camera
+  acct: account
+  acc: account
+  reg: registration
+  info: information
+  admin: administrator
+  uni: university
+  msg: message
+  config: configuration
+  docs: documentation
+  app: application
+  num: number
+  id: identification
+  faq: frequently asked questions
+  kb: knowledge base
+  sms: text message
+
+# ---------------------------------------------------------------------------
+# ACRONYMS — canonical CASING only, never a content change. BM25 matches exact
+# tokens, so "smowl" and "SMOWL" must not be two different things.
+# ---------------------------------------------------------------------------
+acronyms:
+  lms: LMS
+  vas: VAS
+  mfa: MFA
+  2fa: 2FA
+  sis: SIS
+  smowl: SMOWL
+  m365: M365
+  amiu: AmIU
+  it: IT
+  ms: MS
+  pdf: PDF
+  otp: OTP
+
+# ---------------------------------------------------------------------------
+# SPELL CORRECTIONS — observed (and next-most-likely) misspellings.
+#
+# These exist because fuzzy matching cannot reach them safely: "smwol" is a
+# transposition at SequenceMatcher ratio 0.80 and "moddle" one edit at 0.83,
+# both below any threshold loose enough not to mangle ordinary words. An
+# explicit map is both safer and faster than lowering the fuzzy bar.
+# ---------------------------------------------------------------------------
+spell_corrections:
+  # SMOWL
+  smwol: SMOWL
+  swoml: SMOWL
+  swowl: SMOWL
+  smowll: SMOWL
+  smowel: SMOWL
+  smol: SMOWL
+  smowl: SMOWL
+  smowal: SMOWL
+  # Moodle
+  moddle: Moodle
+  modle: Moodle
+  moodel: Moodle
+  mooddle: Moodle
+  moodle: Moodle
+  muddle: Moodle
+  # Authenticator
+  athenticator: authenticator
+  authentificator: authenticator
+  autheticator: authenticator
+  authenicator: authenticator
+  authenticater: authenticator
+  athenticater: authenticator
+  # Password
+  pasword: password
+  paswword: password
+  passwrod: password
+  passowrd: password
+  pssword: password
+  passwd: password
+  # Portal
+  protal: portal
+  porta: portal
+  portall: portal
+  # Microsoft
+  micorsoft: Microsoft
+  microsft: Microsoft
+  mircosoft: Microsoft
+  # Outlook
+  outllok: Outlook
+  otlook: Outlook
+  outlok: Outlook
+  # Login
+  logn: login
+  loign: login
+  lgoin: login
+  # Exam
+  exame: exam
+  exm: exam
+  examm: exam
+  # Register
+  registor: register
+  regsiter: register
+  reigster: register
+  # Teams
+  taems: Teams
+  tems: Teams
+  # Supplementary
+  suplementary: supplementary
+  supplimentary: supplementary
+  # Student
+  studnet: student
+  studetn: student
+  # Access
+  acess: access
+  acces: access
+  # Contact
+  contac: contact
+  contct: contact
+
+# ---------------------------------------------------------------------------
+# INTENTS
+# ---------------------------------------------------------------------------
+# An intent is what the user is trying to DO, independent of wording. It drives
+# three things:
+#
+#   phrasings  — canonical rewrites added as retrieval variants. This is what
+#                collapses "can't login" / "unable to access" / "where do I
+#                sign in" onto one retrieval: all three match one pattern and
+#                inherit the same phrasings.
+#   boost      — terms that, when present in a candidate chunk, nudge it UP the
+#                final ordering. A BOOST, never a filter: a chunk with none of
+#                these is ranked lower, not removed. Keep lists short and
+#                specific — a boost term that appears in half the corpus is
+#                noise, not signal.
+#   procedural — true when the answer is a multi-step walkthrough. Procedural
+#                intents get a larger adaptive top_k so the steps survive
+#                intact; factual ones get a smaller one so the model is not
+#                handed four near-duplicate excerpts to reconcile.
+#
+# `patterns` are Python regexes matched case-insensitively against the
+# NORMALISED query (lowercased, punctuation stripped, spelling corrected), so
+# write them against clean text.
+
+intents:
+  password_reset:
+    patterns:
+      - '\b(forgot|lost|forgotten|don''?t remember|cannot remember)\b.*\b(password|pwd|passcode)\b'
+      - '\b(password|pwd)\b.*\b(forgot|lost|reset|recover|change)\b'
+    phrasings:
+      - How do I reset my password?
+      - password reset steps
+      - recover forgotten password
+    boost: [password, reset, credentials, authentication, portal, recover, login]
+    procedural: true
+
+  login_trouble:
+    patterns:
+      - '\b(can''?t|cannot|unable to|couldn''?t|failed to|having (trouble|issues?|problems?))\b.*\b(log ?in|log ?on|sign ?in|access|get in|enter)\b'
+      - '\b(login|log ?in|sign ?in)\b.*\b(problem|issue|error|trouble|fail(ed|ure)?|not working)\b'
+      - '\b(account)\b.*\b(locked|lock|blocked|disabled)\b'
+    phrasings:
+      - How do I log in?
+      - login troubleshooting
+      - cannot sign in to my account
+    boost: [login, sign in, access, password, portal, account, credentials]
+    procedural: true
+
+  login_location:
+    patterns:
+      - '\bwhere\b.*\b(do|can|should)\b.*\b(i|we)\b.*\b(log ?in|sign ?in|access|find)\b'
+    phrasings:
+      - How do I log in?
+      - where to sign in
+      - login page location
+    boost: [login, sign in, url, address, portal, access]
+    procedural: false
+
+  setup_howto:
+    patterns:
+      - '\b(how|steps?|guide|instructions?|procedure|process)\b.*\b(set ?up|setup|configure|install)\b'
+    phrasings:
+      - setup instructions
+      - configuration steps
+      - how to set up
+    boost: [setup, configure, install, steps, download, enrol]
+    procedural: true
+
+  camera_issue:
+    patterns:
+      - '\b(camera|webcam|cam|microphone|mic)\b.*\b(not working|fail(ed|ing)?|issue|problem|error|black|blank)\b'
+      - '\b(not working|problem|issue)\b.*\b(camera|webcam|cam)\b'
+    phrasings:
+      - camera not working during exam
+      - webcam troubleshooting
+      - fix camera detection
+    boost: [camera, webcam, SMOWL, proctoring, permissions, browser, exam]
+    procedural: true
+
+  definition:
+    patterns:
+      - '\b(what is|what''?s|explain|describe|tell me about|meaning of)\b'
+    phrasings:
+      - overview and explanation
+      - what it is and how it works
+    boost: []
+    procedural: false
+
+  exam_registration:
+    patterns:
+      - '\b(register|registration|enroll|sign ?up)\b.*\b(exam|examination|test|assessment|course|unit)\b'
+      - '\b(exam|examination)\b.*\b(register|registration|enroll)\b'
+    phrasings:
+      - How do I register for exams?
+      - exam registration process
+    boost: [exam, registration, register, VAS, assessment, deadline]
+    procedural: true
+
+  exam_proctoring:
+    patterns:
+      - '\b(smowl|proctor(ing|ed)?|monitor(ing|ed)?|supervis(ion|ed))\b'
+    phrasings:
+      - How does exam proctoring work?
+      - SMOWL proctoring overview
+    boost: [SMOWL, proctoring, exam, assessment, camera, monitoring]
+    procedural: false
+
+  email_access:
+    patterns:
+      - '\b(email|e-mail|mailbox|outlook|office ?365|microsoft ?365|m365)\b'
+    phrasings:
+      - How do I access my student email?
+      - university email login
+    boost: [email, Outlook, Microsoft 365, mailbox, webmail, password]
+    procedural: false
+
+  contact_support:
+    patterns:
+      - '\b(contact|reach|call|speak to|talk to|get help from)\b.*\b(help ?desk|support|IT|admin|administrator|staff)\b'
+    phrasings:
+      - How do I contact the help desk?
+      - support contact details
+    boost: [help desk, support, contact, email, phone, ticket]
+    procedural: false

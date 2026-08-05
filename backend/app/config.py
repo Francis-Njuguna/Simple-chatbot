@@ -192,6 +192,51 @@ class Settings(BaseSettings):
     top_k_retrieval: int = Field(default=5, alias="TOP_K_RETRIEVAL")
     top_k_images: int = Field(default=3, alias="TOP_K_IMAGES")
 
+    # ------------------------------------------------------------------
+    # Adaptive chunk retrieval
+    #
+    # A fixed top_k is wrong in both directions. When retrieval is confident,
+    # every chunk after the first two or three is near-duplicate material the
+    # model has to reconcile, and reconciling it is where hedged and padded
+    # answers come from. When retrieval is unsure, three chunks is too thin a
+    # base to answer from at all — the useful passage is somewhere in the tail.
+    #
+    # So the count follows the confidence: high confidence narrows, low
+    # confidence widens. Procedural questions ("how do I set up...") widen
+    # further, because their answer is a numbered walkthrough split across
+    # sibling chunks and truncating it mid-sequence produces a partial answer
+    # that reads as complete — the worst failure mode available here.
+    #
+    # This never changes what is RETRIEVED, only how much of the (already
+    # ranked, already gated) result is passed on. Every chunk it selects has
+    # cleared the cosine floor and the cross-encoder gate exactly as before.
+    # ------------------------------------------------------------------
+    adaptive_retrieval_enabled: bool = Field(
+        default=True, alias="ADAPTIVE_RETRIEVAL_ENABLED"
+    )
+    # Confidence at or above which retrieval is treated as unambiguous, and the
+    # narrow chunk count applies. Confidence here is mean cosine over the kept
+    # chunks, so these are on the same 0-1 scale as min_relevance_score.
+    adaptive_high_confidence: float = Field(
+        default=0.62, alias="ADAPTIVE_HIGH_CONFIDENCE"
+    )
+    adaptive_medium_confidence: float = Field(
+        default=0.45, alias="ADAPTIVE_MEDIUM_CONFIDENCE"
+    )
+    # Chunk counts per confidence band.
+    adaptive_chunks_high: int = Field(default=3, alias="ADAPTIVE_CHUNKS_HIGH")
+    adaptive_chunks_medium: int = Field(default=5, alias="ADAPTIVE_CHUNKS_MEDIUM")
+    adaptive_chunks_low: int = Field(default=8, alias="ADAPTIVE_CHUNKS_LOW")
+    # Extra chunks granted when the intent classifier flags the question as
+    # procedural. Added to whichever band applies, then clamped to the ceiling.
+    adaptive_procedural_bonus: int = Field(
+        default=2, alias="ADAPTIVE_PROCEDURAL_BONUS"
+    )
+    # Hard ceiling. The candidate loop materialises up to this many chunks
+    # before the band is chosen, so raising it costs Postgres hydration and
+    # prompt tokens, not retrieval time.
+    adaptive_max_chunks: int = Field(default=10, alias="ADAPTIVE_MAX_CHUNKS")
+
     # MMR trade-off: 1.0 = pure relevance, 0.0 = pure diversity.
     #
     # RETAINED FOR COMPATIBILITY, NO LONGER ON THE RETRIEVAL PATH. MMR used to
@@ -304,6 +349,123 @@ class Settings(BaseSettings):
     # Each extra phrasing is another attempt against a fixed threshold, so
     # raising this past 2 buys nothing and costs off-topic precision.
     rerank_query_forms: int = Field(default=2, alias="RERANK_QUERY_FORMS")
+
+    # ------------------------------------------------------------------
+    # Intent-aware boosting
+    #
+    # When intent classification detects what the user is trying to do (password
+    # reset, login trouble, exam proctoring), boost_terms from the matched intent
+    # are used to nudge chunks containing those terms higher in the final
+    # ordering. This is a BOOST, never a filter — chunks with no boost terms are
+    # ranked lower, not removed, exactly as the user's constraints specify.
+    # ------------------------------------------------------------------
+    # Weight given to the intent boost in the final ordering blend. 0.0 disables
+    # boosting entirely; 0.15 adds a small nudge; higher values give intent
+    # matching more pull. Must be tuned against off-topic precision — too high
+    # and a chunk with boost-term overlap but wrong semantics can overtake the
+    # right answer.
+    intent_boost_weight: float = Field(default=0.15, alias="INTENT_BOOST_WEIGHT")
+
+    # ------------------------------------------------------------------
+    # Article-level scoring
+    #
+    # Chunk ranking alone has a structural blind spot: it judges each chunk in
+    # isolation, so a single strong chunk from an article that is otherwise
+    # irrelevant outranks the second-best chunk of the article that actually
+    # documents the answer. The result is a context window assembled from four
+    # different articles, each contributing one fragment, none contributing
+    # enough to answer from.
+    #
+    # Aggregating chunk scores per article and ranking ARTICLES first fixes
+    # that. The article that answers the question is usually the one with
+    # several good chunks, not one lucky one — and once it is identified, its
+    # own best chunks are the right context, in their original order.
+    # ------------------------------------------------------------------
+    article_scoring_enabled: bool = Field(
+        default=True, alias="ARTICLE_SCORING_ENABLED"
+    )
+    # How an article's score is derived from its chunks' ordering scores.
+    #   "max"   — the article's single best chunk. Rewards one excellent match.
+    #   "mean"  — average across its retrieved chunks. Rewards breadth, but
+    #             penalises a long article whose tail chunks are off-topic.
+    #   "blend" — max plus a fraction of the mean (see article_mean_weight).
+    #             Prefers an article that is both strongly and broadly relevant
+    #             without letting either signal dominate. This is the default
+    #             because both failure modes above are real on this KB.
+    article_score_strategy: Literal["max", "mean", "blend"] = Field(
+        default="blend", alias="ARTICLE_SCORE_STRATEGY"
+    )
+    # Weight of the mean term when strategy is "blend". The max term is always
+    # weighted 1.0, so this is the *relative* pull of breadth over peak.
+    article_mean_weight: float = Field(default=0.4, alias="ARTICLE_MEAN_WEIGHT")
+    # How many top-ranked articles may contribute chunks. 1 forces a single
+    # source (cleanest context, but wrong when the answer genuinely spans two
+    # articles — SMOWL is documented across four here). 2-3 keeps the context
+    # focused while allowing a legitimately multi-article answer.
+    article_top_n: int = Field(default=3, alias="ARTICLE_TOP_N")
+    # Maximum chunks taken from any single article, so one long article cannot
+    # consume the entire budget and crowd out a second relevant source.
+    article_max_chunks_each: int = Field(
+        default=4, alias="ARTICLE_MAX_CHUNKS_EACH"
+    )
+
+    # ------------------------------------------------------------------
+    # Domain knowledge configuration
+    # ------------------------------------------------------------------
+    # Path to the YAML file containing domain-specific synonyms, intents, spelling
+    # corrections, and acronyms. Falls back to built-in defaults when absent.
+    domain_knowledge_path: Optional[str] = Field(
+        default="config/domain_knowledge.yaml", alias="DOMAIN_KNOWLEDGE_PATH"
+    )
+
+    # ------------------------------------------------------------------
+    # Dynamic confidence threshold
+    #
+    # Confidence gates whether the model attempts to answer from retrieved
+    # context or declines. A fixed threshold is wrong in both directions: too
+    # high rejects questions the system could answer (false negatives), too low
+    # accepts off-topic material and produces hallucinated answers.
+    #
+    # A query the preprocessing layer *understood* — one where it detected a
+    # known entity, matched an intent, corrected a typo, or expanded a synonym —
+    # has vocabulary mismatch already corrected for. Its cosine score reflects
+    # semantic relevance, not a vocabulary gap, so a slightly lower bar is safe.
+    # An unrecognised query gets the baseline: if retrieval is mediocre, the KB
+    # likely does not cover it.
+    # ------------------------------------------------------------------
+    confidence_threshold_enabled: bool = Field(
+        default=True, alias="CONFIDENCE_THRESHOLD_ENABLED"
+    )
+    # Baseline threshold for queries the system did not recognise.
+    confidence_threshold_baseline: float = Field(
+        default=0.35, alias="CONFIDENCE_THRESHOLD_BASELINE"
+    )
+    # Threshold for queries where preprocessing detected a known entity, matched
+    # an intent, corrected spelling, or expanded a synonym. Lower than baseline
+    # because vocabulary mismatch is already handled — the remaining cosine gap
+    # is semantic, not lexical.
+    confidence_threshold_understood: float = Field(
+        default=0.30, alias="CONFIDENCE_THRESHOLD_UNDERSTOOD"
+    )
+
+    # ------------------------------------------------------------------
+    # Context assembly
+    #
+    # The flat per-chunk layout repeats an article's title, category, summary
+    # and URL once per excerpt. For a procedural article contributing four
+    # chunks that is four identical headers, which costs prompt budget and
+    # reads to the model as four separate sources agreeing with each other —
+    # false corroboration.
+    #
+    # Article-centric assembly emits each article once, with its excerpts
+    # merged underneath in original chunk order, so a procedure split across
+    # chunks arrives as one continuous numbered sequence. This changes only
+    # how retrieved material is *rendered*; retrieval, ranking and gating are
+    # untouched. Set to False to fall back to the flat per-chunk layout.
+    # ------------------------------------------------------------------
+    article_context_format: bool = Field(
+        default=True, alias="ARTICLE_CONTEXT_FORMAT"
+    )
 
     # ------------------------------------------------------------------
     # Query preprocessing + retrieval cache

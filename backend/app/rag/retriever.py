@@ -31,6 +31,7 @@ Performance notes
 """
 
 import re
+import threading
 import time
 from collections import OrderedDict
 from dataclasses import dataclass, field, replace
@@ -51,7 +52,9 @@ from backend.app.rag.lexical import get_lexical_index, rewrite_query
 from backend.app.rag.reranker import get_reranker
 from backend.app.rag.query_processing import ProcessedQuery, process_query
 from backend.app.prompts.templates import (
+    ARTICLE_CONTEXT_TEMPLATE,
     CONTEXT_CHUNK_TEMPLATE,
+    CONTEXT_GAP_MARKER,
     EMPTY_CONTEXT_NOTE,
     IMAGE_CHUNK_TEMPLATE,
     IMAGE_CONTEXT_NOTE,
@@ -60,6 +63,7 @@ from backend.app.prompts.templates import (
 from backend.app.rag.embeddings import EmbeddingService, get_embedding_service
 from backend.app.services import metadata_service
 from backend.app.utils.logging import get_logger
+from backend.app.utils.metrics import RetrievalTrace, get_metrics
 
 logger = get_logger(__name__)
 
@@ -87,6 +91,31 @@ def _min_max_normalise(values: list[float]) -> list[float]:
     if hi - lo < 1e-9:
         return [0.5] * len(values)
     return [(v - lo) / (hi - lo) for v in values]
+
+
+def _boost_score(text: str, boost_terms: tuple[str, ...]) -> float:
+    """Fraction of the intent's boost terms present in ``text``, in [0, 1].
+
+    Intent classification says what the user is trying to *do*; boost terms are
+    the vocabulary an article that helps them do it would actually contain. A
+    chunk matching 4 of 6 password-reset terms is more likely the right one than
+    a chunk matching none, even when both look similar to a bi-encoder.
+
+    Deliberately a *fraction*, not a count: intents declare different numbers of
+    boost terms (``definition`` declares none, ``password_reset`` seven), and a
+    raw count would silently give term-heavy intents a larger boost than
+    term-light ones for no reason connected to relevance.
+
+    Matching is substring-on-lowercased-text rather than token-set intersection
+    because boost terms are allowed to be phrases ("help desk", "Microsoft 365")
+    and splitting those into tokens would match "help" and "desk" separately —
+    which appear all over a support KB and would make the signal noise.
+    """
+    if not boost_terms or not text:
+        return 0.0
+    haystack = text.lower()
+    hits = sum(1 for term in boost_terms if term and term.lower() in haystack)
+    return hits / len(boost_terms)
 
 
 @dataclass
@@ -141,6 +170,19 @@ class HybridRetriever:
         self._cache: "OrderedDict[tuple[str, str], tuple[float, list[RetrievedChunk], list[RetrievedImage]]]" = (
             OrderedDict()
         )
+        # The retriever is a process-wide singleton serving concurrent requests.
+        # OrderedDict mutation (move_to_end, popitem, __setitem__) is not atomic
+        # across the GIL's bytecode boundaries, and at 1,000+ concurrent requests
+        # two threads evicting simultaneously can corrupt the link structure.
+        # A plain Lock is right here rather than an async one: every critical
+        # section is a handful of dict operations with no await inside, so the
+        # hold time is nanoseconds and there is nothing to yield to.
+        self._cache_lock = threading.Lock()
+        # Cache effectiveness, exported via the metrics endpoint. Counters only
+        # ever increment, so a torn read costs an off-by-one in a gauge — not
+        # worth taking the lock for.
+        self._cache_hits = 0
+        self._cache_misses = 0
 
     def _distance_to_score(self, distance: float) -> float:
         return max(0.0, min(1.0, 1.0 - distance))
@@ -332,6 +374,7 @@ class HybridRetriever:
         top_k: Optional[int] = None,
         query_embedding: Optional[list[float]] = None,
         processed: Optional[ProcessedQuery] = None,
+        trace: Optional[RetrievalTrace] = None,
     ) -> list[RetrievedChunk]:
         """Hybrid multi-query retrieval: vector×N + BM25 → RRF → MMR → rerank.
 
@@ -353,6 +396,7 @@ class HybridRetriever:
           question" while the question is still a real question.
         """
         settings = self.settings
+        explicit_top_k = top_k is not None
         top_k = top_k or settings.top_k_retrieval
         debug = settings.retrieval_debug_active
         timings: dict[str, float] = {}
@@ -487,6 +531,17 @@ class HybridRetriever:
         fused_ids = sorted(fused, key=lambda cid: fused[cid], reverse=True)
         fused_ids = [cid for cid in fused_ids if cid in pool_by_id]
 
+        if trace is not None:
+            # Funnel widths, recorded on the caller's trace rather than on self:
+            # the retriever is a process-wide singleton and instance state here
+            # would be overwritten by whichever concurrent request finished last.
+            trace.n_bm25 = len(lexical_ranking)
+            trace.n_vector = len(vector_ranking)
+            trace.n_fused = len(fused_ids)
+            trace.timings_ms.update(
+                {k.replace("_ms", ""): v for k, v in timings.items()}
+            )
+
         # --- Stage 4: shortlist for the cross-encoder --------------------
         # Straight top-N by fused RRF score. Deliberately NOT MMR, which used to
         # run here.
@@ -586,6 +641,25 @@ class HybridRetriever:
         rerank_scores = await anyio.to_thread.run_sync(_score_all)
         timings["rerank_ms"] = (time.perf_counter() - start) * 1000
 
+        # --- Intent boost ------------------------------------------------
+        # A per-candidate nudge from the intent classifier's boost terms. This
+        # is additive on the ordering score and applies to NO other stage: the
+        # cross-encoder gate, the cosine floor and confidence all read their
+        # original values, so a chunk can never be admitted *because* it matched
+        # boost terms — only ranked above another chunk that already passed.
+        #
+        # That separation is what keeps "boost, never filter" true in practice.
+        # Folding it into the gate instead would let a keyword-dense but
+        # off-topic chunk clear a threshold it should not, which is the failure
+        # mode intent boosting is most likely to introduce.
+        boost_weight = settings.intent_boost_weight
+        boosts: list[float] = [0.0] * len(selected_ids)
+        if boost_weight > 0.0 and processed.boost_terms:
+            boosts = [
+                _boost_score(pool_by_id[cid]["text"], processed.boost_terms)
+                for cid in selected_ids
+            ]
+
         if rerank_scores is not None:
             # Ordering signal. The cross-encoder score alone is the obvious
             # choice and is what this used to do, but it conflates two jobs the
@@ -608,7 +682,7 @@ class HybridRetriever:
             if weight >= 1.0:
                 order = sorted(
                     range(len(selected_ids)),
-                    key=lambda i: rerank_scores[i],
+                    key=lambda i: rerank_scores[i] + boost_weight * boosts[i],
                     reverse=True,
                 )
             else:
@@ -616,7 +690,9 @@ class HybridRetriever:
                 norm_ce = _min_max_normalise(rerank_scores)
                 norm_rrf = _min_max_normalise(rrf_vals)
                 combined = [
-                    weight * norm_ce[i] + (1.0 - weight) * norm_rrf[i]
+                    weight * norm_ce[i]
+                    + (1.0 - weight) * norm_rrf[i]
+                    + boost_weight * boosts[i]
                     for i in range(len(selected_ids))
                 ]
                 order = sorted(
@@ -630,11 +706,19 @@ class HybridRetriever:
             # and called that a rerank).
             order = sorted(
                 range(len(selected_ids)),
-                key=lambda i: pool_by_id[selected_ids[i]]["score"],
+                key=lambda i: pool_by_id[selected_ids[i]]["score"]
+                + boost_weight * boosts[i],
                 reverse=True,
             )
 
         # --- Stage 6: materialise, dedupe, apply the relevance floors ----
+        # Collect up to the adaptive ceiling; the actual count is chosen below
+        # once confidence can be measured over what survived.
+        max_collect = (
+            settings.adaptive_max_chunks
+            if settings.adaptive_retrieval_enabled
+            else top_k
+        )
         chunks: list[RetrievedChunk] = []
         seen_texts: set[str] = set()
         dropped_by_gate = 0
@@ -692,8 +776,101 @@ class HybridRetriever:
                     _raw_meta=meta,
                 )
             )
-            if len(chunks) >= top_k:
+            if len(chunks) >= max_collect:
                 break
+
+        if trace is not None:
+            # Survivors of the cross-encoder gate and cosine floor, before the
+            # adaptive and article-level stages trim for context budget.
+            trace.n_after_rerank = len(chunks)
+
+        # --- Adaptive chunk selection ----------------------------------------
+        # A fixed top_k is wrong in both directions: too much when confident
+        # (near-duplicate material the model must reconcile), too little when
+        # unsure (the useful passage is in the tail). The count follows the
+        # measured confidence, and procedural questions ("how do I set up...")
+        # get extra chunks because their answer is a numbered walkthrough split
+        # across sibling chunks and truncating it mid-sequence produces a
+        # partial answer that reads as complete.
+        #
+        # An explicitly-passed top_k (from a caller that knows exactly what it
+        # wants) is always honoured — adaptive only applies when the caller
+        # relied on the default.
+        if settings.adaptive_retrieval_enabled and chunks and not explicit_top_k:
+            confidence = float(np.mean([c.score for c in chunks]))
+            if confidence >= settings.adaptive_high_confidence:
+                band_count = settings.adaptive_chunks_high
+            elif confidence >= settings.adaptive_medium_confidence:
+                band_count = settings.adaptive_chunks_medium
+            else:
+                band_count = settings.adaptive_chunks_low
+
+            if processed.procedural:
+                band_count += settings.adaptive_procedural_bonus
+
+            final_k = min(band_count, len(chunks), settings.adaptive_max_chunks)
+            chunks = chunks[:final_k]
+        elif chunks:
+            # Adaptive disabled or explicit top_k: fall back to the configured
+            # or caller-supplied count.
+            chunks = chunks[:top_k]
+
+        # --- Article-level scoring and selection -----------------------------
+        # Chunk ranking alone judges each chunk in isolation, so a single strong
+        # chunk from an article that is otherwise irrelevant can outrank the
+        # second-best chunk of the article that actually documents the answer.
+        # The result is a context window assembled from four different articles,
+        # each contributing one fragment, none contributing enough to answer from.
+        #
+        # Aggregating scores per article and ranking ARTICLES first fixes that.
+        # The article that answers the question is usually the one with several
+        # good chunks, not one lucky one — and once it is identified, its own
+        # best chunks are the right context, in their original order.
+        #
+        # This never alters what CLEARED the gates; it only redistributes the
+        # surviving budget across sources.
+        if settings.article_scoring_enabled and chunks:
+            # Rank position → ordering score, computed once. Position in
+            # `chunks` IS the Stage 5 blend's verdict (RRF + cross-encoder +
+            # intent boost), so inverting it recovers that score's ordering
+            # without re-deriving any single component and silently dropping
+            # the others. Keyed by chunk_id, not by dataclass identity: two
+            # chunks can compare equal field-by-field, and `.index()` on that
+            # would attribute the second one's rank to the first.
+            rank_score = {
+                c.chunk_id: float(len(chunks) - i) for i, c in enumerate(chunks)
+            }
+
+            article_chunks: dict[str, list[RetrievedChunk]] = {}
+            for chunk in chunks:
+                article_chunks.setdefault(chunk.article_id, []).append(chunk)
+
+            article_scores: dict[str, float] = {}
+            for article_id, art_chunks in article_chunks.items():
+                scores = [rank_score[c.chunk_id] for c in art_chunks]
+                peak, mean = float(max(scores)), float(np.mean(scores))
+                if settings.article_score_strategy == "max":
+                    article_scores[article_id] = peak
+                elif settings.article_score_strategy == "mean":
+                    article_scores[article_id] = mean
+                else:  # blend — peak, with breadth as a tie-breaking bonus
+                    article_scores[article_id] = peak + settings.article_mean_weight * mean
+
+            # Select the top-N articles, then take each one's best chunks. Both
+            # the article order and the within-article order come from the
+            # blend, so a higher-ranked article's chunks always precede a
+            # lower-ranked one's — the model reads one coherent source before
+            # the next rather than interleaved fragments.
+            top_articles = sorted(
+                article_scores, key=lambda aid: article_scores[aid], reverse=True
+            )[: settings.article_top_n]
+
+            rebuilt: list[RetrievedChunk] = []
+            for article_id in top_articles:
+                rebuilt.extend(
+                    article_chunks[article_id][: settings.article_max_chunks_each]
+                )
+            chunks = rebuilt
 
         # An empty result after the gate dropped everything is a real signal, not
         # a bug: the KB has nothing that answers this question, and the prompt
@@ -719,6 +896,7 @@ class HybridRetriever:
                                       rerank_forms=rerank_forms,
                                       rerank_scores=rerank_scores,
                                       selected_ids=selected_ids,
+                                      boosts=boosts,
                                       fused=fused)
         else:
             logger.info(
@@ -752,6 +930,7 @@ class HybridRetriever:
         rerank_forms: Optional[list[str]] = None,
         rerank_scores: Optional[list[float]] = None,
         selected_ids: Optional[list[str]] = None,
+        boosts: Optional[list[float]] = None,
         fused: Optional[dict[str, float]] = None,
     ) -> None:
         """Dump the full retrieval trace.
@@ -818,6 +997,11 @@ class HybridRetriever:
         # --- reranking ---
         if rerank_forms:
             lines.append(f"[retrieval] rerank as: {rerank_forms}")
+        if processed and processed.boost_terms:
+            lines.append(
+                f"[retrieval] boost terms: {list(processed.boost_terms)} "
+                f"(weight={self.settings.intent_boost_weight:.2f})"
+            )
         if selected_ids is not None and rerank_scores is not None:
             shown = sorted(
                 range(len(selected_ids)), key=lambda i: rerank_scores[i], reverse=True
@@ -828,8 +1012,11 @@ class HybridRetriever:
             )
             for i in shown:
                 kept = "keep" if rerank_scores[i] >= self.settings.rerank_min_score else "DROP"
+                boost_str = ""
+                if boosts and i < len(boosts) and boosts[i] > 0:
+                    boost_str = f" boost={boosts[i]:.2f}"
                 lines.append(
-                    f"      {kept} {rerank_scores[i]:+7.2f}  {selected_ids[i]}"
+                    f"      {kept} {rerank_scores[i]:+7.2f}{boost_str}  {selected_ids[i]}"
                 )
         elif selected_ids is not None:
             lines.append(
@@ -928,7 +1115,7 @@ class HybridRetriever:
         category: Optional[str] = None,
         query_embedding: Optional[list[float]] = None,
         db: Optional[AsyncSession] = None,
-    ) -> tuple[list[RetrievedChunk], list[RetrievedImage]]:
+    ) -> tuple[list[RetrievedChunk], list[RetrievedImage], Optional[ProcessedQuery]]:
         """Embed the query ONCE and run text + image retrieval concurrently.
 
         The query is preprocessed first (see ``rag.query_processing``) into the
@@ -940,8 +1127,28 @@ class HybridRetriever:
         When ``db`` is supplied the survivors are hydrated from PostgreSQL
         before returning; without it the caller gets id-only records and can
         hydrate later (or not at all, e.g. in tests).
+
+        Returns (chunks, images, processed_query). The ProcessedQuery is needed
+        by compute_confidence and confidence_threshold to adapt the threshold
+        based on whether preprocessing understood the query.
         """
+        trace = RetrievalTrace(original_query=query, category=category)
+        started = time.perf_counter()
+
+        t0 = time.perf_counter()
         processed = self._process_query(query) if self.settings.query_rewrite_enabled else None
+        trace.timings_ms["query_processing"] = (time.perf_counter() - t0) * 1000.0
+        if processed:
+            trace.normalized_query = processed.normalized
+            trace.variants = list(processed.variants)
+            trace.intents = list(processed.intent_names)
+            trace.entities = list(getattr(processed, "entities", ()) or ())
+            trace.corrections = dict(getattr(processed, "corrections", {}) or {})
+            trace.understood = bool(processed.understood)
+            trace.procedural = bool(processed.procedural)
+        else:
+            trace.normalized_query = query
+
         # Cache on the normalised form, so "moddle login" and "Moodle login"
         # share an entry — the whole point of normalisation is that they are
         # the same question.
@@ -957,17 +1164,22 @@ class HybridRetriever:
                 images = [replace(i) for i in images]
                 await self.hydrate_chunks(db, chunks)
                 await self.hydrate_images(db, images)
-            return chunks, images
+            trace.cache_hit = True
+            self._finish_trace(trace, chunks, images, processed, started)
+            return chunks, images, processed
 
         # The shared embedding is of the *normalised* text: it is what the
         # primary vector search and the MMR/cosine stages are scored against.
         embed_text = processed.normalized if processed else query
         if query_embedding is None:
+            t0 = time.perf_counter()
             query_embedding = await self.embedding_service.embed_query_async(embed_text)
+            trace.timings_ms["embedding"] = (time.perf_counter() - t0) * 1000.0
 
         chunks: list[RetrievedChunk] = []
         images: list[RetrievedImage] = []
 
+        t0 = time.perf_counter()
         async with anyio.create_task_group() as tg:
             async def _text() -> None:
                 nonlocal chunks
@@ -976,6 +1188,7 @@ class HybridRetriever:
                     category=category,
                     query_embedding=query_embedding,
                     processed=processed,
+                    trace=trace,
                 )
 
             async def _images() -> None:
@@ -986,6 +1199,7 @@ class HybridRetriever:
 
             tg.start_soon(_text)
             tg.start_soon(_images)
+        trace.timings_ms["search"] = (time.perf_counter() - t0) * 1000.0
 
         # Cache the un-hydrated results: hydration is a cheap cached DB read,
         # and caching pre-hydration keeps Postgres the source of truth for
@@ -996,12 +1210,43 @@ class HybridRetriever:
             # Both hydrations are independent single-table reads, but they share
             # one AsyncSession — SQLAlchemy sessions are not concurrency-safe, so
             # these must run sequentially, not in a task group.
+            t0 = time.perf_counter()
             chunks = [replace(c) for c in chunks]
             images = [replace(i) for i in images]
             await self.hydrate_chunks(db, chunks)
             await self.hydrate_images(db, images)
+            trace.timings_ms["hydration"] = (time.perf_counter() - t0) * 1000.0
 
-        return chunks, images
+        self._finish_trace(trace, chunks, images, processed, started)
+        return chunks, images, processed
+
+    def _finish_trace(
+        self,
+        trace: RetrievalTrace,
+        chunks: list[RetrievedChunk],
+        images: list[RetrievedImage],
+        processed: Optional[ProcessedQuery],
+        started: float,
+    ) -> None:
+        """Fill in outcome fields, log the trace, and fold it into the metrics.
+
+        Wrapped in a blanket except: observability is strictly additive, and a
+        bug in a counter must never turn a successful retrieval into a 500.
+        """
+        try:
+            trace.n_final = len(chunks)
+            trace.n_images = len(images)
+            trace.confidence = self.compute_confidence(chunks, processed)
+            trace.threshold = self.confidence_threshold(processed)
+            trace.passed_threshold = trace.confidence >= trace.threshold
+            trace.total_ms = (time.perf_counter() - started) * 1000.0
+
+            # n_bm25/n_vector/n_fused/n_after_rerank were written directly by
+            # retrieve_text onto this same trace object.
+            trace.log(logger)
+            get_metrics().record_trace(trace)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("Failed to record retrieval trace: %s", exc)
 
     # ------------------------------------------------------------------
     # Retrieval cache — TTL, keyed by (normalised query, category)
@@ -1013,15 +1258,19 @@ class HybridRetriever:
         ttl = self.settings.retrieval_cache_ttl
         if ttl <= 0:
             return None
-        entry = self._cache.get(key)
-        if entry is None:
-            return None
-        stored_at, chunks, images = entry
-        if (time.monotonic() - stored_at) > ttl:
-            self._cache.pop(key, None)
-            return None
-        # Refresh recency for the LRU eviction below.
-        self._cache.move_to_end(key)
+        with self._cache_lock:
+            entry = self._cache.get(key)
+            if entry is None:
+                self._cache_misses += 1
+                return None
+            stored_at, chunks, images = entry
+            if (time.monotonic() - stored_at) > ttl:
+                self._cache.pop(key, None)
+                self._cache_misses += 1
+                return None
+            # Refresh recency for the LRU eviction below.
+            self._cache.move_to_end(key)
+            self._cache_hits += 1
         logger.info("Retrieval cache HIT for %r", key[0])
         return chunks, images
 
@@ -1034,14 +1283,28 @@ class HybridRetriever:
         ttl = self.settings.retrieval_cache_ttl
         if ttl <= 0:
             return
-        self._cache[key] = (time.monotonic(), chunks, images)
-        self._cache.move_to_end(key)
-        while len(self._cache) > self.settings.retrieval_cache_size:
-            self._cache.popitem(last=False)
+        with self._cache_lock:
+            self._cache[key] = (time.monotonic(), chunks, images)
+            self._cache.move_to_end(key)
+            while len(self._cache) > self.settings.retrieval_cache_size:
+                self._cache.popitem(last=False)
 
     def clear_cache(self) -> None:
         """Drop cached retrievals — called after a re-ingest changes the corpus."""
-        self._cache.clear()
+        with self._cache_lock:
+            self._cache.clear()
+
+    def cache_stats(self) -> dict[str, float]:
+        """Cache effectiveness, for the metrics endpoint."""
+        hits, misses = self._cache_hits, self._cache_misses
+        total = hits + misses
+        return {
+            "hits": hits,
+            "misses": misses,
+            "size": len(self._cache),
+            "capacity": self.settings.retrieval_cache_size,
+            "hit_rate": (hits / total) if total else 0.0,
+        }
 
     # ------------------------------------------------------------------
     # PostgreSQL hydration — display metadata, source of truth
@@ -1101,6 +1364,9 @@ class HybridRetriever:
         if self.settings.group_adjacent_chunks:
             chunks = self._group_adjacent(chunks)
 
+        if self.settings.article_context_format:
+            return self._format_context_by_article(chunks)
+
         # One article contributes several chunks; its summary is emitted once,
         # as framing above the excerpts, rather than repeated per chunk.
         summaries_emitted: set[str] = set()
@@ -1117,6 +1383,65 @@ class HybridRetriever:
                     url=chunk.url,
                     summary=summary,
                     text=chunk.text,
+                )
+            )
+        return "\n".join(blocks)
+
+    @staticmethod
+    def _format_context_by_article(chunks: list[RetrievedChunk]) -> str:
+        """Render one block per article instead of one per chunk.
+
+        Title, category, summary and source URL describe the *article*, so the
+        flat layout repeats them once per excerpt — prompt budget spent on
+        duplication, and several identical headers that read to the model as
+        separate sources corroborating each other.
+
+        Articles keep retrieval order: an article's position is that of its
+        best-ranked chunk, so the reranker's verdict still decides what the
+        model reads first. Within an article, excerpts are ordered by
+        chunk_index — original reading order, which is what makes a numbered
+        procedure legible. Non-adjacent excerpts get an explicit gap marker;
+        chunks 2 and 7 have real content missing between them and running them
+        together would imply a continuity that is not there.
+        """
+        order: list[str] = []
+        by_article: dict[str, list[RetrievedChunk]] = {}
+        for chunk in chunks:
+            if chunk.article_id not in by_article:
+                by_article[chunk.article_id] = []
+                order.append(chunk.article_id)
+            by_article[chunk.article_id].append(chunk)
+
+        blocks: list[str] = []
+        for n, article_id in enumerate(order, start=1):
+            members = sorted(by_article[article_id], key=lambda c: c.chunk_index)
+            head = members[0]
+
+            # Stitch excerpts in reading order, marking real gaps. The chunker
+            # prepends a "[Title]" header to every chunk; the article header
+            # above already carries that, so strip it from all of them.
+            parts: list[str] = []
+            prev_index: Optional[int] = None
+            for member in members:
+                if prev_index is not None and member.chunk_index != prev_index + 1:
+                    parts.append(CONTEXT_GAP_MARKER)
+                text = _strip_title_header(member.text).strip()
+                if text:
+                    parts.append(text)
+                prev_index = member.chunk_index
+
+            summary = ""
+            if head.summary:
+                summary = f"Overview: {head.summary}\n\n"
+
+            blocks.append(
+                ARTICLE_CONTEXT_TEMPLATE.format(
+                    n=n,
+                    title=head.title or "Untitled article",
+                    category=head.category or "General",
+                    summary=summary,
+                    body="\n\n".join(parts),
+                    url=head.url,
                 )
             )
         return "\n".join(blocks)
@@ -1211,11 +1536,40 @@ class HybridRetriever:
 
         return "\n".join([IMAGE_CONTEXT_NOTE, "", *lines])
 
-    def compute_confidence(self, chunks: list[RetrievedChunk]) -> float:
+    def compute_confidence(
+        self, chunks: list[RetrievedChunk], processed: Optional[ProcessedQuery] = None
+    ) -> float:
+        """Mean cosine similarity, adjusted by whether preprocessing understood the query.
+
+        A query the preprocessing layer *understood* — one where it detected a
+        known entity, matched an intent, corrected a typo, or expanded a synonym —
+        has vocabulary mismatch already corrected for. Its cosine score reflects
+        semantic relevance, not a vocabulary gap, so a slightly lower threshold is
+        safe. An unrecognised query gets the baseline: if retrieval is mediocre,
+        the KB likely does not cover it.
+
+        This returns the confidence *value*, not a pass/fail verdict — the caller
+        compares it against the appropriate threshold from settings.
+        """
         if not chunks:
             return 0.0
         scores = [c.score for c in chunks]
         return float(np.mean(scores))
+
+    def confidence_threshold(self, processed: Optional[ProcessedQuery] = None) -> float:
+        """Return the appropriate confidence threshold for this query.
+
+        Queries the preprocessing layer *understood* (detected entity, matched
+        intent, corrected spelling, expanded synonym) earn a slightly lower bar
+        because vocabulary mismatch is already handled — the remaining cosine gap
+        is semantic, not lexical.
+        """
+        settings = self.settings
+        if not settings.confidence_threshold_enabled:
+            return settings.confidence_threshold_baseline
+        if processed and processed.understood:
+            return settings.confidence_threshold_understood
+        return settings.confidence_threshold_baseline
 
 
 # ---------------------------------------------------------------------------

@@ -33,14 +33,82 @@ os.environ.setdefault("KMP_DUPLICATE_LIB_OK", "TRUE")
 
 sys.path.insert(0, ".")
 
-from scripts.eval_set import EVAL_QUERIES  # noqa: E402
+from scripts.eval_set import EVAL_QUERIES, STABILITY_GROUPS  # noqa: E402
 
 # Report order. Driven off the eval set rather than hardcoded so adding a query
 # class does not silently vanish from the summary — the previous hardcoded tuple
 # meant a new class was scored per-query but omitted from every aggregate.
-_KIND_ORDER = ["covered", "synonym", "typo", "partial", "offtopic"]
+_KIND_ORDER = [
+    "covered", "synonym", "typo", "conversational",
+    "short", "long", "partial", "offtopic",
+]
 KINDS = [k for k in _KIND_ORDER if any(k == kind for _, _, kind in EVAL_QUERIES)]
 KINDS += sorted({kind for _, _, kind in EVAL_QUERIES} - set(_KIND_ORDER))
+
+
+def _jaccard(a: set, b: set) -> float:
+    """Overlap of two sets in [0, 1]. Two empty sets count as identical.
+
+    Both phrasings retrieving nothing IS consistent behaviour — the failure
+    this metric hunts is two phrasings of the same question disagreeing, and
+    "both declined" is agreement.
+    """
+    if not a and not b:
+        return 1.0
+    union = a | b
+    return len(a & b) / len(union) if union else 1.0
+
+
+async def measure_stability(retriever, session_factory) -> dict:
+    """Pairwise top-k article overlap within each synonym group.
+
+    This is the metric per-query recall cannot express. Five phrasings of
+    "I forgot my password" can each retrieve a *correct* article while
+    retrieving five *different* correct articles — recall reads 1.000 and the
+    user still gets a different answer depending on wording.
+
+    Every unordered pair within a group is compared on its retrieved article
+    set; the group score is the mean. A group scoring 1.000 means every
+    phrasing collapsed onto exactly the same articles, which is the Objective-1
+    target stated as a number.
+    """
+    results: dict[str, dict] = {}
+    for group, queries in STABILITY_GROUPS.items():
+        retrieved: dict[str, set] = {}
+        confidences: dict[str, float] = {}
+        for query in queries:
+            async with session_factory() as db:
+                chunks, _images, processed = await retriever.retrieve(query, db=db)
+            retrieved[query] = {c.article_id for c in chunks}
+            confidences[query] = retriever.compute_confidence(chunks, processed)
+
+        pairs: list[float] = []
+        for i, qa in enumerate(queries):
+            for qb in queries[i + 1:]:
+                pairs.append(_jaccard(retrieved[qa], retrieved[qb]))
+
+        # Top-1 agreement: did every phrasing land on the same single best
+        # article? Stricter than Jaccard and closer to what the user perceives,
+        # since the top article dominates the assembled context.
+        tops = [sorted(retrieved[q])[:1] for q in queries]
+        top1_values = [t[0] for t in tops if t]
+        top1_agree = (
+            len(set(top1_values)) == 1 and len(top1_values) == len(queries)
+        )
+
+        results[group] = {
+            "n_queries": len(queries),
+            "mean_overlap": statistics.mean(pairs) if pairs else 0.0,
+            "min_overlap": min(pairs) if pairs else 0.0,
+            "top1_agreement": top1_agree,
+            "conf_spread": (
+                max(confidences.values()) - min(confidences.values())
+                if confidences else 0.0
+            ),
+            "per_query": {q: sorted(retrieved[q]) for q in queries},
+        }
+    return results
+
 
 
 def _setup_logging() -> None:
@@ -83,7 +151,7 @@ async def main() -> None:
         # cold numbers rather than cache hits.
         async with async_session_factory() as db:
             t0 = time.perf_counter()
-            chunks, images = await retriever.retrieve(query, db=db)
+            chunks, images, processed = await retriever.retrieve(query, db=db)
             elapsed = (time.perf_counter() - t0) * 1000
 
         got = [c.article_id for c in chunks]
@@ -98,7 +166,7 @@ async def main() -> None:
             recall = 1.0 if hits else 0.0
             precision = (len(hits) / len(got)) if got else 0.0
 
-        confidence = retriever.compute_confidence(chunks)
+        confidence = retriever.compute_confidence(chunks, processed)
         rows.append({
             "query": query, "kind": kind, "expected": expected,
             "got": got, "n_chunks": len(chunks), "n_images": len(images),
@@ -152,7 +220,35 @@ async def main() -> None:
               f"(higher is better; <=0 means the score is uninformative)")
     print("=" * 96)
 
-    payload = {"summary": summary, "rows": rows}
+    # ---------------- synonym stability ----------------
+    stability = await measure_stability(retriever, async_session_factory)
+    print()
+    print("SYNONYM STABILITY — do differently-worded versions of the same question")
+    print("retrieve the same articles? (1.000 = identical retrieval)")
+    print("-" * 96)
+    print(f"{'group':<18} {'n':>3} {'mean':>6} {'min':>6} {'top1':>6} {'confΔ':>7}")
+    for group, s in stability.items():
+        print(f"{group:<18} {s['n_queries']:>3} {s['mean_overlap']:>6.3f} "
+              f"{s['min_overlap']:>6.3f} {'yes' if s['top1_agreement'] else 'NO':>6} "
+              f"{s['conf_spread']:>7.3f}")
+
+    overall = statistics.mean(s["mean_overlap"] for s in stability.values())
+    worst = min(s["min_overlap"] for s in stability.values())
+    agreed = sum(1 for s in stability.values() if s["top1_agreement"])
+    print("-" * 96)
+    print(f"{'OVERALL':<18} mean_overlap={overall:.3f}  worst_pair={worst:.3f}  "
+          f"top1_agreement={agreed}/{len(stability)}")
+    print("=" * 96)
+
+    summary["stability"] = {
+        "mean_overlap": overall,
+        "worst_pair": worst,
+        "top1_agreement": agreed / len(stability) if stability else 0.0,
+        "groups": {g: {k: v for k, v in s.items() if k != "per_query"}
+                   for g, s in stability.items()},
+    }
+
+    payload = {"summary": summary, "rows": rows, "stability_detail": stability}
 
     if json_out:
         with open(json_out, "w", encoding="utf-8") as fh:
@@ -180,6 +276,12 @@ async def main() -> None:
         a = summary["latency_ms"]["mean"]
         print(f"{'latency_ms.mean':<28} {b:>9.0f} {a:>9.0f} {a - b:>+9.0f}")
 
+        if "stability" in base["summary"]:
+            for metric in ("mean_overlap", "worst_pair", "top1_agreement"):
+                b = base["summary"]["stability"][metric]
+                a = summary["stability"][metric]
+                print(f"{'stability.' + metric:<28} {b:>9.3f} {a:>9.3f} {a - b:>+9.3f}")
+
         # Per-query regressions matter more than the aggregate: a mean that
         # improves while three queries break is not an improvement.
         base_rows = {r["query"]: r for r in base["rows"]}
@@ -193,6 +295,24 @@ async def main() -> None:
                 print(f"   {r['query']}  (expected {r['expected']}, got {r['got']})")
         else:
             print("\nno per-query recall regressions")
+
+        # Stability regressions are the ones this whole effort exists to
+        # prevent, and they are invisible in recall — a group can hold
+        # recall=1.000 while its phrasings drift onto different articles.
+        base_stab = base["summary"].get("stability", {}).get("groups", {})
+        if base_stab:
+            drops = [
+                (g, base_stab[g]["mean_overlap"], s["mean_overlap"])
+                for g, s in stability.items()
+                if g in base_stab
+                and s["mean_overlap"] < base_stab[g]["mean_overlap"] - 1e-9
+            ]
+            if drops:
+                print(f"\n!! {len(drops)} STABILITY REGRESSION(S):")
+                for group, before, after in drops:
+                    print(f"   {group}: {before:.3f} -> {after:.3f}")
+            else:
+                print("no synonym-stability regressions")
 
 
 if __name__ == "__main__":

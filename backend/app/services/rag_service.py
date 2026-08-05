@@ -113,7 +113,7 @@ class RAGService:
         async with timer.astage("retrieval"):
             # `db` is what lets the retriever hydrate title/url/summary/caption
             # from PostgreSQL — Chroma only carries ids and filter keys now.
-            chunks, images = await self.retriever.retrieve(
+            chunks, images, processed = await self.retriever.retrieve(
                 message,
                 category=category,
                 query_embedding=query_embedding,
@@ -123,7 +123,10 @@ class RAGService:
         with timer.stage("context_build"):
             context = self.retriever.format_context(chunks)
             image_context = self.retriever.format_images(images)
-            confidence = self.retriever.compute_confidence(chunks)
+            # `processed` comes straight out of retrieval so the threshold can
+            # adapt to whether preprocessing understood the query (entity/intent
+            # detected, typo corrected, synonym expanded).
+            confidence = self.retriever.compute_confidence(chunks, processed)
 
         return session, history, chunks, images, context, image_context, confidence
 
