@@ -47,6 +47,13 @@ class Settings(BaseSettings):
     jwt_algorithm: str = Field(default="HS256", alias="JWT_ALGORITHM")
     jwt_expire_minutes: int = Field(default=1440, alias="JWT_EXPIRE_MINUTES")
     rate_limit: str = Field(default="30/minute", alias="RATE_LIMIT")
+    # Separate, tighter budget for the chat endpoints, which are the only ones
+    # that cost a retrieval pass plus an LLM call. Kept configurable so a load
+    # test can raise it for the duration of a run: with a hardcoded limit, every
+    # concurrency level above it measures the rate limiter rather than the
+    # server's actual capacity. Read once at route-import time (slowapi's
+    # decorator takes a literal), so changing it needs a server restart.
+    chat_rate_limit: str = Field(default="20/minute", alias="CHAT_RATE_LIMIT")
 
     # ------------------------------------------------------------------
     # PostgreSQL — individual credential components
@@ -304,6 +311,13 @@ class Settings(BaseSettings):
     rerank_model: str = Field(
         default="cross-encoder/ms-marco-MiniLM-L-6-v2", alias="RERANK_MODEL"
     )
+    # Replace the cross-encoder's Linear layers with dynamic int8 at load time.
+    # Reranking is ~84% of retrieval wall time and the ways to score fewer pairs
+    # all cost recall, so cheaper-per-pair is the only remaining CPU lever.
+    # Measured 1.25x with identical top-1 and top-5 on a 16-chunk probe, but it
+    # DOES perturb the tail ordering, so it stays off until the full eval set
+    # confirms no recall regression. Off is always safe: fp32 is slower, correct.
+    rerank_quantize: bool = Field(default=False, alias="RERANK_QUANTIZE")
     # Absolute relevance gate on the cross-encoder logit. Unlike cosine, this
     # score reflects whether a passage *answers* the query, so it can reject
     # material that merely shares vocabulary with it.

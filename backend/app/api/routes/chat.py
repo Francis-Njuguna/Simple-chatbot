@@ -7,15 +7,23 @@ from fastapi import APIRouter, Depends, Request
 from fastapi.responses import StreamingResponse
 
 from backend.app.api.dependencies import get_rag_service
+from backend.app.config import get_settings
 from backend.app.core.limiter import limiter  # ← was: from backend.app.main import limiter
 from backend.app.models.schemas import ChatRequest, ChatResponse
 from backend.app.services.rag_service import RAGService
 
 router = APIRouter(prefix="/chat", tags=["chat"])
 
+# Chat is the expensive path (retrieval + LLM), so it gets a tighter budget than
+# the app-wide RATE_LIMIT. Read from settings rather than hardcoded so a load
+# test can raise it via CHAT_RATE_LIMIT without editing route code — a
+# hardcoded limit makes any concurrency measurement above it a test of the
+# limiter instead of the server.
+_chat_rate_limit = get_settings().chat_rate_limit
+
 
 @router.post("", response_model=ChatResponse)
-@limiter.limit("20/minute")
+@limiter.limit(_chat_rate_limit)
 async def chat(
     request: Request,
     body: ChatRequest,
@@ -34,7 +42,7 @@ async def chat(
 
 
 @router.post("/stream")
-@limiter.limit("20/minute")
+@limiter.limit(_chat_rate_limit)
 async def chat_stream(
     request: Request,
     body: ChatRequest,

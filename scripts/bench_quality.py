@@ -74,24 +74,33 @@ async def measure_stability(retriever, session_factory) -> dict:
     """
     results: dict[str, dict] = {}
     for group, queries in STABILITY_GROUPS.items():
-        retrieved: dict[str, set] = {}
+        # Rank order matters for the top-1 metric below, so this is an ordered,
+        # de-duplicated list rather than a set. Building it as a set (which is
+        # what this used to do) silently reduced "top-1 agreement" to "the
+        # lowest article id happened to match", because a set comprehension
+        # discards the ranking that makes the metric mean anything.
+        retrieved: dict[str, list[str]] = {}
         confidences: dict[str, float] = {}
         for query in queries:
             async with session_factory() as db:
                 chunks, _images, processed = await retriever.retrieve(query, db=db)
-            retrieved[query] = {c.article_id for c in chunks}
+            ordered: list[str] = []
+            for chunk in chunks:
+                if chunk.article_id not in ordered:
+                    ordered.append(chunk.article_id)
+            retrieved[query] = ordered
             confidences[query] = retriever.compute_confidence(chunks, processed)
 
         pairs: list[float] = []
         for i, qa in enumerate(queries):
             for qb in queries[i + 1:]:
-                pairs.append(_jaccard(retrieved[qa], retrieved[qb]))
+                pairs.append(_jaccard(set(retrieved[qa]), set(retrieved[qb])))
 
         # Top-1 agreement: did every phrasing land on the same single best
         # article? Stricter than Jaccard and closer to what the user perceives,
-        # since the top article dominates the assembled context.
-        tops = [sorted(retrieved[q])[:1] for q in queries]
-        top1_values = [t[0] for t in tops if t]
+        # since the top article dominates the assembled context. Reads the
+        # rank-0 entry, so it is genuinely "the best-scoring article" now.
+        top1_values = [retrieved[q][0] for q in queries if retrieved[q]]
         top1_agree = (
             len(set(top1_values)) == 1 and len(top1_values) == len(queries)
         )
@@ -101,11 +110,13 @@ async def measure_stability(retriever, session_factory) -> dict:
             "mean_overlap": statistics.mean(pairs) if pairs else 0.0,
             "min_overlap": min(pairs) if pairs else 0.0,
             "top1_agreement": top1_agree,
+            "top1_articles": {q: (retrieved[q][0] if retrieved[q] else None)
+                              for q in queries},
             "conf_spread": (
                 max(confidences.values()) - min(confidences.values())
                 if confidences else 0.0
             ),
-            "per_query": {q: sorted(retrieved[q]) for q in queries},
+            "per_query": {q: retrieved[q] for q in queries},
         }
     return results
 
@@ -203,13 +214,23 @@ async def main() -> None:
               f"mean_chunks={s['chunks']:.1f}")
 
     all_ms = [r["ms"] for r in rows]
+    # Median as well as mean: these are wall-clock measurements on a developer
+    # machine, and a single suspend/resume or a background build turns one query
+    # into a multi-hour outlier that drags the mean by orders of magnitude while
+    # every other query was normal. The median says what a typical query cost;
+    # a large mean/median gap is the signal that the run was disturbed.
     summary["latency_ms"] = {
         "mean": statistics.mean(all_ms),
+        "median": statistics.median(all_ms),
         "p95": sorted(all_ms)[min(len(all_ms) - 1, int(0.95 * len(all_ms)))],
         "max": max(all_ms),
     }
-    print(f"{'latency':<9} mean={summary['latency_ms']['mean']:.0f}ms  "
+    print(f"{'latency':<9} median={summary['latency_ms']['median']:.0f}ms  "
+          f"mean={summary['latency_ms']['mean']:.0f}ms  "
           f"p95={summary['latency_ms']['p95']:.0f}ms  max={summary['latency_ms']['max']:.0f}ms")
+    if summary["latency_ms"]["mean"] > 3 * summary["latency_ms"]["median"]:
+        print("          !! mean >> median — this run was disturbed "
+              "(machine suspend, or CPU contention). Trust the median, or re-run.")
 
     # The headline quality number: a confidence score is only useful if it is
     # higher on answerable queries than on nonsense.
@@ -275,6 +296,10 @@ async def main() -> None:
         b = base["summary"]["latency_ms"]["mean"]
         a = summary["latency_ms"]["mean"]
         print(f"{'latency_ms.mean':<28} {b:>9.0f} {a:>9.0f} {a - b:>+9.0f}")
+        if "median" in base["summary"]["latency_ms"]:
+            b = base["summary"]["latency_ms"]["median"]
+            a = summary["latency_ms"]["median"]
+            print(f"{'latency_ms.median':<28} {b:>9.0f} {a:>9.0f} {a - b:>+9.0f}")
 
         if "stability" in base["summary"]:
             for metric in ("mean_overlap", "worst_pair", "top1_agreement"):

@@ -38,6 +38,63 @@ class CrossEncoderReranker:
             return False
         return True
 
+    @staticmethod
+    def _quantize_int8(model: Any) -> bool:
+        """Swap the cross-encoder's Linear layers for dynamic int8 in place.
+
+        Reranking is ~84% of retrieval wall time (scripts/profile_pipeline.py),
+        and the two ways to score *fewer* pairs both cost recall, so making each
+        pair cheaper is the remaining lever. Measured 1.25x on this box
+        (35/40 paired trials, sign-test z=+4.74) — see scripts/bench_quantization.py.
+
+        The swap target matters and both obvious ones are wrong:
+
+        * ``model.model = q`` — ``model`` is a property, so nn.Module.__setattr__
+          registers ``q`` as a NEW child of the CrossEncoder Sequential. forward()
+          then hands the raw HF module a features dict and dies on
+          ``input_ids.size()``.
+        * ``wrapper.auto_model = q`` — ``auto_model`` is a read-only property
+          alias. Assignment creates a shadowing instance attribute while forward()
+          keeps using the fp32 module, so scores come back BIT-IDENTICAL and the
+          quantization silently does nothing.
+
+        The module actually used by forward() is the registered child
+        ``wrapper._modules["model"]``, so that is what gets replaced. Returns
+        True only if the weights genuinely changed.
+        """
+        import torch
+        from torch.quantization import quantize_dynamic
+
+        try:
+            wrapper = model[0]
+        except (TypeError, IndexError, KeyError):
+            logger.warning("Cross-encoder has unexpected layout — skipping int8")
+            return False
+
+        modules = getattr(wrapper, "_modules", {})
+        inner = modules.get("model")
+        if not isinstance(inner, torch.nn.Module):
+            logger.warning(
+                "Cross-encoder wrapper %s exposes no 'model' child (%s) — "
+                "skipping int8",
+                type(wrapper).__name__,
+                list(modules),
+            )
+            return False
+
+        quantized = quantize_dynamic(inner, {torch.nn.Linear}, dtype=torch.qint8)
+        n_q = sum(
+            1 for _, mod in quantized.named_modules()
+            if "quantized" in type(mod).__module__
+        )
+        if n_q == 0:
+            logger.warning("int8 quantization produced no quantized modules — skipping")
+            return False
+
+        modules["model"] = quantized
+        logger.info("Cross-encoder quantized to int8 (%d quantized modules)", n_q)
+        return True
+
     def _ensure_model(self) -> Optional[Any]:
         """Load the model once. Returns None if unavailable."""
         if self._model is not None or self._load_failed:
@@ -49,7 +106,19 @@ class CrossEncoderReranker:
                 from sentence_transformers import CrossEncoder  # lazy import
 
                 logger.info("Loading cross-encoder: %s", self.settings.rerank_model)
-                self._model = CrossEncoder(self.settings.rerank_model)
+                model = CrossEncoder(self.settings.rerank_model)
+                if getattr(self.settings, "rerank_quantize", False):
+                    # Failure here is non-fatal: an un-quantized reranker is
+                    # slower but correct, which beats no reranker at all.
+                    try:
+                        self._quantize_int8(model)
+                    except Exception as exc:  # noqa: BLE001
+                        logger.warning(
+                            "int8 quantization failed (%s: %s) — using fp32",
+                            type(exc).__name__,
+                            exc,
+                        )
+                self._model = model
                 logger.info("Cross-encoder ready")
             except Exception as exc:  # noqa: BLE001 — any load failure degrades gracefully
                 self._load_failed = True

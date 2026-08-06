@@ -1,0 +1,142 @@
+{
+  "trustworthy": true,
+  "drift_fraction": 0.07229736418727341,
+  "cpu_count": 4,
+  "torch_default_threads": 2,
+  "calls_per_config": 32,
+  "warmup_calls": 4,
+  "results": [
+    {
+      "name": "anchor_open",
+      "torch_threads": 2,
+      "concurrency": 4,
+      "n_calls": 32,
+      "wall_s": 6.839964799997688,
+      "throughput_per_s": 4.678386649008898,
+      "latency_median_ms": 840.6550500003505,
+      "latency_p95_ms": 935.6525000002875,
+      "latency_max_ms": 972.8314999993017,
+      "notes": "opening drift anchor"
+    },
+    {
+      "name": "full_request_t1_c1",
+      "torch_threads": 1,
+      "concurrency": 1,
+      "n_calls": 32,
+      "wall_s": 10.277676400000928,
+      "throughput_per_s": 3.1135442248402674,
+      "latency_median_ms": 310.5673000009119,
+      "latency_p95_ms": 387.38809999995283,
+      "latency_max_ms": 462.49040000111563,
+      "notes": ""
+    },
+    {
+      "name": "full_request_t1_c4",
+      "torch_threads": 1,
+      "concurrency": 4,
+      "n_calls": 32,
+      "wall_s": 7.141548999999941,
+      "throughput_per_s": 4.4808206174879235,
+      "latency_median_ms": 872.8209500004596,
+      "latency_p95_ms": 944.7839000022213,
+      "latency_max_ms": 959.1295999998692,
+      "notes": ""
+    },
+    {
+      "name": "full_request_t1_c16",
+      "torch_threads": 1,
+      "concurrency": 16,
+      "n_calls": 32,
+      "wall_s": 6.82959800000026,
+      "throughput_per_s": 4.685488077043302,
+      "latency_median_ms": 2763.699450000786,
+      "latency_p95_ms": 5475.489100001141,
+      "latency_max_ms": 6338.449899998523,
+      "notes": ""
+    },
+    {
+      "name": "full_request_t2_c1",
+      "torch_threads": 2,
+      "concurrency": 1,
+      "n_calls": 32,
+      "wall_s": 10.737040799998795,
+      "throughput_per_s": 2.9803370030971283,
+      "latency_median_ms": 327.7905000013561,
+      "latency_p95_ms": 404.2375999997603,
+      "latency_max_ms": 501.38390000211075,
+      "notes": ""
+    },
+    {
+      "name": "full_request_t2_c4",
+      "torch_threads": 2,
+      "concurrency": 4,
+      "n_calls": 32,
+      "wall_s": 6.9518032999985735,
+      "throughput_per_s": 4.603122185578318,
+      "latency_median_ms": 811.364750001303,
+      "latency_p95_ms": 1057.7120999987528,
+      "latency_max_ms": 1078.2389999985753,
+      "notes": ""
+    },
+    {
+      "name": "full_request_t2_c16",
+      "torch_threads": 2,
+      "concurrency": 16,
+      "n_calls": 32,
+      "wall_s": 7.139623099999881,
+      "throughput_per_s": 4.482029310482865,
+      "latency_median_ms": 3112.5533999984327,
+      "latency_p95_ms": 5289.342000000033,
+      "latency_max_ms": 6108.125499999005,
+      "notes": ""
+    },
+    {
+      "name": "full_request_t4_c1",
+      "torch_threads": 4,
+      "concurrency": 1,
+      "n_calls": 32,
+      "wall_s": 10.551570800002082,
+      "throughput_per_s": 3.0327238101831897,
+      "latency_median_ms": 332.9838000008749,
+      "latency_p95_ms": 394.15960000042105,
+      "latency_max_ms": 453.2036999989941,
+      "notes": ""
+    },
+    {
+      "name": "full_request_t4_c4",
+      "torch_threads": 4,
+      "concurrency": 4,
+      "n_calls": 32,
+      "wall_s": 6.841818500000954,
+      "throughput_per_s": 4.677119102179565,
+      "latency_median_ms": 823.0451500021445,
+      "latency_p95_ms": 944.517400002951,
+      "latency_max_ms": 948.2395999984874,
+      "notes": ""
+    },
+    {
+      "name": "full_request_t4_c16",
+      "torch_threads": 4,
+      "concurrency": 16,
+      "n_calls": 32,
+      "wall_s": 7.531514900001639,
+      "throughput_per_s": 4.24881321020729,
+      "latency_median_ms": 3149.0109999995184,
+      "latency_p95_ms": 5175.296099998377,
+      "latency_max_ms": 6141.722500000469,
+      "notes": ""
+    },
+    {
+      "name": "anchor_close",
+      "torch_threads": 2,
+      "concurrency": 4,
+      "n_calls": 32,
+      "wall_s": 7.373014300002978,
+      "throughput_per_s": 4.340151625636624,
+      "latency_median_ms": 879.653200001485,
+      "latency_p95_ms": 1147.7250999996613,
+      "latency_max_ms": 1219.7301000014704,
+      "notes": "closing drift anchor"
+    }
+  ]
+}
