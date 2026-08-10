@@ -19,6 +19,7 @@ loading the SentenceTransformer model (and building the LLM HTTP client) lazily
 ``lifespan`` startup so the very first query is fast.
 """
 
+import logging
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -28,6 +29,7 @@ from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
+from sqlalchemy.exc import TimeoutError as SQLAlchemyTimeoutError
 
 # Shared limiter singleton – defined in a dedicated leaf module so that route
 # handlers can import it without creating a circular dependency on main.py.
@@ -41,12 +43,24 @@ from backend.app.api.routes import (
     observability,
 )
 from backend.app.config import get_settings
-from backend.app.database.session import init_db
-from backend.app.utils.exceptions import AppError, app_error_to_http
+from backend.app.core.request_context import (
+    REQUEST_ID_HEADER,
+    RequestContextMiddleware,
+    get_request_id,
+    request_elapsed_ms,
+)
+from backend.app.database.session import init_db, pool_stats
+from backend.app.utils.exceptions import (
+    AppError,
+    DatabaseUnavailableError,
+    app_error_to_http,
+)
 from backend.app.utils.logging import get_logger, setup_logging
+from backend.app.utils.metrics import get_metrics
 
 settings = get_settings()
 logger = get_logger(__name__)
+metrics = get_metrics()
 
 
 # ---------------------------------------------------------------------------
@@ -208,7 +222,15 @@ app.add_middleware(
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
+    # Without this the browser hides X-Request-ID from JS, so a user reporting a
+    # failed request has no id to quote.
+    expose_headers=[REQUEST_ID_HEADER],
 )
+
+# Added last, so it runs FIRST: Starlette applies middleware in reverse
+# registration order. The request id must be bound before anything else can log,
+# and the X-Request-ID header must survive CORS.
+app.add_middleware(RequestContextMiddleware)
 
 # ---------------------------------------------------------------------------
 # Static files
@@ -233,14 +255,94 @@ app.include_router(history.router, prefix=api_prefix)
 app.include_router(observability.router)
 
 # ---------------------------------------------------------------------------
-# Global exception handler
+# Global exception handlers
 # ---------------------------------------------------------------------------
+#
+# Why three handlers rather than one:
+#
+# * ``AppError``               — expected, already-classified failures. A 4xx is
+#                                the caller's problem and is not worth a stack
+#                                trace; a 5xx is ours and gets one.
+# * ``SQLAlchemyTimeoutError`` — pool exhaustion that escaped ``db_scope``. Any
+#                                code path still using the request-scoped
+#                                ``get_db_session`` dependency raises this raw,
+#                                and it previously matched no handler at all:
+#                                Starlette turned it into a bare 500 with no log
+#                                line, which is why a load test could produce 84
+#                                failures and zero errors in ``app.log``.
+# * ``Exception``              — the catch-all. Same reasoning: anything
+#                                unhandled must leave a structured, greppable
+#                                record behind rather than only a traceback on
+#                                stdout that the log file never sees.
+#
+# Every handler logs the pool snapshot. Under saturation the proximate exception
+# is often a symptom (a timeout somewhere else, a cancelled task) while the pool
+# reading is the diagnosis, and it costs nothing to capture.
+
+
+def _log_failure(request: Request, exc: BaseException, *, level: int = logging.ERROR) -> str:
+    """Emit one structured record for a failed request. Returns its request id.
+
+    Deliberately does not include the response body or any client payload — the
+    id is the join key, and the request itself is already logged upstream.
+    """
+    state = request.scope.get("state") or {}
+    request_id = state.get("request_id") or get_request_id()
+    elapsed_ms = request_elapsed_ms(state)
+    logger.log(
+        level,
+        "Request failed | id=%s | %s %s | exc=%s: %s | elapsed=%s | pool=%s",
+        request_id,
+        request.method,
+        request.url.path,
+        type(exc).__name__,
+        exc,
+        f"{elapsed_ms:.0f}ms" if elapsed_ms is not None else "unknown",
+        pool_stats(),
+        exc_info=exc,
+    )
+    return request_id
 
 
 @app.exception_handler(AppError)
-async def app_error_handler(_: Request, exc: AppError) -> JSONResponse:
+async def app_error_handler(request: Request, exc: AppError) -> JSONResponse:
     http_exc = app_error_to_http(exc)
-    return JSONResponse(status_code=http_exc.status_code, content={"detail": http_exc.detail})
+    content: dict[str, object] = {"detail": http_exc.detail}
+    if http_exc.status_code >= 500:
+        # Server-side failure: log it with full context and hand the caller an
+        # id they can quote. ``DatabaseUnavailableError`` arrives here as a 503.
+        content["request_id"] = _log_failure(request, exc)
+    return JSONResponse(status_code=http_exc.status_code, content=content)
+
+
+@app.exception_handler(SQLAlchemyTimeoutError)
+async def pool_timeout_handler(request: Request, exc: SQLAlchemyTimeoutError) -> JSONResponse:
+    """Pool exhaustion that did not pass through ``db_scope``.
+
+    Reported as 503, not 500: the request was well-formed and failed only
+    because the server is saturated, so retrying is the correct client
+    behaviour. The driver's message names pool sizes and can name the host, so
+    it stays in the log and never reaches the response body.
+    """
+    metrics.counter(
+        "db_pool_timeouts_total",
+        labels={"scope": "unscoped"},
+        help_text="Requests that failed waiting for a DB connection.",
+    )
+    request_id = _log_failure(request, exc)
+    return JSONResponse(
+        status_code=503,
+        content={"detail": DatabaseUnavailableError().message, "request_id": request_id},
+    )
+
+
+@app.exception_handler(Exception)
+async def unhandled_error_handler(request: Request, exc: Exception) -> JSONResponse:
+    request_id = _log_failure(request, exc)
+    return JSONResponse(
+        status_code=500,
+        content={"detail": "Internal server error.", "request_id": request_id},
+    )
 
 
 # ---------------------------------------------------------------------------

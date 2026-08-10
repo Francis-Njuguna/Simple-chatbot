@@ -1109,6 +1109,31 @@ class HybridRetriever:
         images.sort(key=lambda x: x.score, reverse=True)
         return images[:top_k]
 
+    async def hydrate_results(
+        self,
+        db: AsyncSession,
+        chunks: list[RetrievedChunk],
+        images: list[RetrievedImage],
+    ) -> tuple[list[RetrievedChunk], list[RetrievedImage]]:
+        """Copy, then fill display fields from PostgreSQL. Returns the copies.
+
+        Copying is not optional: retrieval results may be the very objects held
+        in the retrieval cache, and hydration mutates them in place. Writing
+        through would bake one moment's Postgres metadata into the cache and
+        keep serving it past the metadata TTL.
+
+        This is the ONLY part of retrieval that touches PostgreSQL — Chroma,
+        BM25 and the cross-encoder never do. Callers can therefore run the whole
+        search with no session open and acquire one only for this call.
+        """
+        chunks = [replace(c) for c in chunks]
+        images = [replace(i) for i in images]
+        # Independent single-table reads, but one AsyncSession is not
+        # concurrency-safe, so these run sequentially rather than in a group.
+        await self.hydrate_chunks(db, chunks)
+        await self.hydrate_images(db, images)
+        return chunks, images
+
     async def retrieve(
         self,
         query: str,
@@ -1158,12 +1183,7 @@ class HybridRetriever:
         if cached is not None:
             chunks, images = cached
             if db is not None:
-                # Hydration mutates the records, so serve copies — otherwise a
-                # later request would mutate the cached objects in place.
-                chunks = [replace(c) for c in chunks]
-                images = [replace(i) for i in images]
-                await self.hydrate_chunks(db, chunks)
-                await self.hydrate_images(db, images)
+                chunks, images = await self.hydrate_results(db, chunks, images)
             trace.cache_hit = True
             self._finish_trace(trace, chunks, images, processed, started)
             return chunks, images, processed
@@ -1207,14 +1227,8 @@ class HybridRetriever:
         self._cache_put(cache_key, chunks, images)
 
         if db is not None:
-            # Both hydrations are independent single-table reads, but they share
-            # one AsyncSession — SQLAlchemy sessions are not concurrency-safe, so
-            # these must run sequentially, not in a task group.
             t0 = time.perf_counter()
-            chunks = [replace(c) for c in chunks]
-            images = [replace(i) for i in images]
-            await self.hydrate_chunks(db, chunks)
-            await self.hydrate_images(db, images)
+            chunks, images = await self.hydrate_results(db, chunks, images)
             trace.timings_ms["hydration"] = (time.perf_counter() - t0) * 1000.0
 
         self._finish_trace(trace, chunks, images, processed, started)

@@ -123,6 +123,23 @@ class Result:
 
 
 @dataclass
+class ServerMetrics:
+    """Server-side counters sampled from /metrics/debug around a level.
+
+    Latency measured from the client cannot separate "the DB was slow" from
+    "the request waited 30s for a connection that never came" — both look like
+    one number. These are read from the server so connection *queueing* is
+    visible as its own quantity.
+    """
+
+    acquire_ms: dict[str, float] = field(default_factory=dict)
+    hold_ms: dict[str, float] = field(default_factory=dict)
+    pool: dict[str, float] = field(default_factory=dict)
+    pool_timeouts: float = 0.0
+    available: bool = False
+
+
+@dataclass
 class LevelReport:
     """Aggregated outcome for one concurrency level."""
 
@@ -130,6 +147,7 @@ class LevelReport:
     requests: int
     wall_s: float
     results: list[Result] = field(default_factory=list)
+    metrics: ServerMetrics = field(default_factory=ServerMetrics)
 
     @property
     def ok_results(self) -> list[Result]:
@@ -193,6 +211,121 @@ def classify_error(exc: BaseException | None, status: int | None) -> tuple[Error
 
 
 DECLINE_MARKERS = ("isn't covered", "is not covered", "outside", "not able to", "don't have")
+
+
+# ---------------------------------------------------------------------------
+# Server-side metric sampling
+# ---------------------------------------------------------------------------
+#
+# The client can only see total latency. Whether a 40s request spent 38s waiting
+# for a database connection or 38s inside the LLM is invisible from here, and
+# those two findings have opposite fixes. /metrics carries the server's own
+# histograms, so sampling it before and after a level attributes the time.
+
+
+def _parse_prometheus(text: str) -> dict[str, float]:
+    """Flatten the exposition format to ``{series_with_labels: value}``.
+
+    Deliberately tolerant: an unparseable line is skipped rather than raising.
+    A benchmark must not abort because one metric is malformed.
+    """
+    out: dict[str, float] = {}
+    for line in text.splitlines():
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        try:
+            name, _, value = line.rpartition(" ")
+            out[name.strip()] = float(value)
+        except ValueError:
+            continue
+    return out
+
+
+def _histogram_delta(
+    before: dict[str, float], after: dict[str, float], metric: str
+) -> dict[str, float]:
+    """Statistics for the observations that happened *between* two samples.
+
+    Deltas, not absolutes: the registry is cumulative for the process's whole
+    lifetime, so an absolute mean at level 4 is diluted by levels 1-3 and by the
+    warm-up. ``count`` here is exactly the number of connection checkouts that
+    level caused, which is itself a useful figure.
+
+    p95 is interpolated within the containing bucket. That is an estimate — the
+    histogram does not retain individual observations — and is reported as such.
+    """
+    prefix_sum = f"{metric}_sum"
+    prefix_count = f"{metric}_count"
+
+    def total(prefix: str, sample: dict[str, float]) -> float:
+        return sum(v for k, v in sample.items() if k.split("{")[0] == prefix)
+
+    d_count = total(prefix_count, after) - total(prefix_count, before)
+    d_sum = total(prefix_sum, after) - total(prefix_sum, before)
+    if d_count <= 0:
+        return {}
+
+    # Merge per-scope buckets into one distribution keyed by upper bound.
+    buckets: dict[float, float] = {}
+    for key, after_value in after.items():
+        if not key.startswith(f"{metric}_bucket"):
+            continue
+        le_part = key.rpartition('le="')[2].partition('"')[0]
+        bound = float("inf") if le_part == "+Inf" else float(le_part)
+        buckets[bound] = buckets.get(bound, 0.0) + after_value - before.get(key, 0.0)
+
+    stats = {"count": d_count, "mean_ms": d_sum / d_count, "total_ms": d_sum}
+
+    target = 0.95 * d_count
+    previous_bound, previous_cum = 0.0, 0.0
+    for bound in sorted(buckets):
+        cumulative = buckets[bound]
+        if cumulative >= target:
+            if bound == float("inf") or cumulative == previous_cum:
+                stats["p95_ms"] = previous_bound
+            else:
+                fraction = (target - previous_cum) / (cumulative - previous_cum)
+                stats["p95_ms"] = previous_bound + fraction * (bound - previous_bound)
+            break
+        previous_bound, previous_cum = bound, cumulative
+    return stats
+
+
+async def sample_metrics(base_url: str) -> dict[str, float]:
+    """Snapshot the server's Prometheus metrics. Empty dict if unavailable."""
+    try:
+        async with httpx.AsyncClient() as client:
+            response = await client.get(f"{base_url.rstrip('/')}/metrics", timeout=10.0)
+            response.raise_for_status()
+            return _parse_prometheus(response.text)
+    except BaseException:  # noqa: BLE001 - metrics are a bonus, never a blocker
+        return {}
+
+
+def build_server_metrics(
+    before: dict[str, float], after: dict[str, float]
+) -> ServerMetrics:
+    if not before or not after:
+        return ServerMetrics(available=False)
+
+    timeouts = sum(
+        v for k, v in after.items() if k.split("{")[0] == "db_pool_timeouts_total"
+    ) - sum(v for k, v in before.items() if k.split("{")[0] == "db_pool_timeouts_total")
+
+    return ServerMetrics(
+        acquire_ms=_histogram_delta(before, after, "db_connection_acquire_ms"),
+        hold_ms=_histogram_delta(before, after, "db_connection_hold_ms"),
+        pool={
+            k.split("{")[0].replace("db_pool_", ""): v
+            for k, v in after.items()
+            if k.split("{")[0].startswith("db_pool_")
+            and not k.split("{")[0].endswith("_total")
+        },
+        pool_timeouts=timeouts,
+        available=True,
+    )
+
 
 
 async def one_request(
@@ -261,6 +394,10 @@ async def run_level(
 
     start_barrier = asyncio.Barrier(users)
 
+    # Sampled outside the timed section so the metrics scrape itself is not
+    # counted as load.
+    metrics_before = await sample_metrics(base_url)
+
     async with httpx.AsyncClient(limits=limits) as client:
 
         async def virtual_user(user_id: int) -> list[Result]:
@@ -286,6 +423,8 @@ async def run_level(
         )
         wall = time.perf_counter() - t0
 
+    metrics_after = await sample_metrics(base_url)
+
     for item in gathered:
         if isinstance(item, BaseException):
             results.append(
@@ -294,7 +433,13 @@ async def run_level(
         else:
             results.extend(item)
 
-    return LevelReport(users=users, requests=len(results), wall_s=wall, results=results)
+    return LevelReport(
+        users=users,
+        requests=len(results),
+        wall_s=wall,
+        results=results,
+        metrics=build_server_metrics(metrics_before, metrics_after),
+    )
 
 
 async def preflight(base_url: str, timeout_s: float) -> bool:
@@ -399,6 +544,47 @@ def print_level(report: LevelReport) -> None:
             )
             print(f"    {kind:<14} {count:>4}   e.g. {sample}")
 
+    print_db(report.metrics)
+
+
+def print_db(m: ServerMetrics) -> None:
+    """Print the connection-lifecycle numbers for one level.
+
+    Hold time is the headline. It answers the question total latency cannot:
+    for how much of a ~10s request is a pooled connection unusable by anyone
+    else? When it tracks request duration, concurrency is capped at the pool
+    ceiling regardless of CPU headroom. When it is a few milliseconds, the pool
+    has stopped being the constraint.
+    """
+    if not m.available:
+        print("  db       (server metrics unavailable — is /metrics reachable?)")
+        return
+
+    acquire, hold = m.acquire_ms, m.hold_ms
+    if not hold:
+        print("  db       no connections were checked out during this level")
+        return
+
+    print(
+        f"  db hold  mean {hold['mean_ms']:8.1f}ms  "
+        f"p95 ~{hold.get('p95_ms', 0):8.1f}ms  "
+        f"checkouts {hold['count']:.0f}"
+    )
+    if acquire:
+        print(
+            f"  db acq   mean {acquire['mean_ms']:8.1f}ms  "
+            f"p95 ~{acquire.get('p95_ms', 0):8.1f}ms"
+            + ("   <- QUEUEING FOR CONNECTIONS" if acquire["mean_ms"] > 50 else "")
+        )
+    if m.pool:
+        print(
+            f"  pool     ceiling {m.pool.get('ceiling', 0):.0f}  "
+            f"checked_out {m.pool.get('checked_out', 0):.0f}  "
+            f"available {m.pool.get('available', 0):.0f}"
+        )
+    if m.pool_timeouts:
+        print(f"  pool     *** {m.pool_timeouts:.0f} POOL TIMEOUTS during this level ***")
+
 
 def print_summary(reports: list[LevelReport], db_ceiling: int | None) -> None:
     """Print the cross-level comparison table and the interpretation."""
@@ -408,10 +594,16 @@ def print_summary(reports: list[LevelReport], db_ceiling: int | None) -> None:
     print("=" * 78)
     print(
         f"{'users':>6} {'ok':>6} {'err%':>7} {'p50':>8} {'p95':>8} "
-        f"{'p99':>8} {'max':>8} {'req/s':>8}  verdict"
+        f"{'p99':>8} {'max':>8} {'req/s':>8} {'dbhold':>9} {'dbacq':>9}  verdict"
     )
     for r in reports:
         lat = r.latencies
+        hold = r.metrics.hold_ms.get("mean_ms")
+        acq = r.metrics.acquire_ms.get("mean_ms")
+        db_cols = (
+            f"{hold:>8.1f}ms" if hold is not None else f"{'-':>10}",
+            f"{acq:>8.1f}ms" if acq is not None else f"{'-':>10}",
+        )
         if not lat:
             print(f"{r.users:>6} {0:>6} {r.error_rate * 100:>6.1f}% " + " " * 34 + "  NO DATA")
             continue
@@ -420,8 +612,18 @@ def print_summary(reports: list[LevelReport], db_ceiling: int | None) -> None:
         print(
             f"{r.users:>6} {len(r.ok_results):>6} {r.error_rate * 100:>6.1f}% "
             f"{pct(lat, 50):>7.2f}s {p95:>7.2f}s {pct(lat, 99):>7.2f}s "
-            f"{max(lat):>7.2f}s {r.throughput:>7.2f}  {verdict}"
+            f"{max(lat):>7.2f}s {r.throughput:>7.2f} {db_cols[0]} {db_cols[1]}  {verdict}"
         )
+
+    print()
+    print(
+        "  dbhold = mean time a PostgreSQL connection stayed checked out, per "
+        "checkout.\n"
+        "  dbacq  = mean time spent waiting to obtain one. A dbacq that climbs "
+        "with load is\n"
+        "           pool queueing; a dbhold near request duration is the "
+        "cause of it."
+    )
 
     print()
     print("interpretation")
@@ -480,6 +682,43 @@ def print_summary(reports: list[LevelReport], db_ceiling: int | None) -> None:
 
     if db_ceiling is not None:
         crossing = [r for r in reports if r.users > db_ceiling]
+        measured = [r for r in reports if r.metrics.available and r.metrics.hold_ms]
+        timed_out = [r for r in reports if r.metrics.pool_timeouts]
+
+        if timed_out:
+            print()
+            print(
+                f"  DB POOL EXHAUSTION: "
+                + ", ".join(
+                    f"{r.metrics.pool_timeouts:.0f} timeouts at {r.users} users"
+                    for r in timed_out
+                )
+            )
+            print(
+                "        requests waited the full pool_timeout and failed. Check "
+                "dbhold above:\n"
+                "        if it is close to request duration, connections are being "
+                "held across\n"
+                "        non-DB work and the fix is session scope, not pool size."
+            )
+        elif measured:
+            worst = max(measured, key=lambda r: r.metrics.hold_ms["mean_ms"])
+            worst_hold_s = worst.metrics.hold_ms["mean_ms"] / 1000.0
+            worst_p50 = pct(worst.latencies, 50) if worst.latencies else 0.0
+            share = (worst_hold_s / worst_p50 * 100) if worst_p50 else 0.0
+            print()
+            print(
+                f"  no pool timeouts at any level. Worst mean connection hold "
+                f"{worst.metrics.hold_ms['mean_ms']:.1f}ms at {worst.users} users"
+            )
+            print(
+                f"        = {share:.2f}% of that level's p50 request "
+                f"({worst_p50:.2f}s), so a connection is idle-held for a "
+                "negligible\n"
+                "        fraction of each request and the pool is not the "
+                "constraint."
+            )
+
         if crossing:
             print()
             print(
@@ -488,11 +727,12 @@ def print_summary(reports: list[LevelReport], db_ceiling: int | None) -> None:
             )
             print(
                 f"        levels above {db_ceiling} ({', '.join(str(r.users) for r in crossing)}) "
-                "queue for a connection; that wait"
+                "exceed that ceiling in *users*, which only"
             )
             print(
-                "        appears in total latency but in no per-stage timer. Raise "
-                "DB_POOL_SIZE / DB_MAX_OVERFLOW to move it."
+                "        matters if a connection is held for the length of a "
+                "request. Compare dbhold\n"
+                "        against p50 above before considering DB_POOL_SIZE."
             )
 
 
@@ -633,6 +873,13 @@ def main() -> int:
                         "max": max(r.latencies) if r.latencies else None,
                     },
                     "latencies_s": r.latencies,
+                    "db": {
+                        "available": r.metrics.available,
+                        "acquire_ms": r.metrics.acquire_ms,
+                        "hold_ms": r.metrics.hold_ms,
+                        "pool": r.metrics.pool,
+                        "pool_timeouts": r.metrics.pool_timeouts,
+                    },
                 }
                 for r in reports
             ],

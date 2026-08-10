@@ -37,9 +37,19 @@ async def get_session() -> AsyncGenerator[AsyncSession, None]:
 DbSession = Annotated[AsyncSession, Depends(get_session)]
 
 
-def get_rag_service(db: DbSession) -> RAGService:
-    # Reuse the process-wide retriever + LLM singletons (built once at startup).
-    return RAGService(db, retriever=get_retriever(), llm_service=get_llm_service())
+def get_rag_service() -> RAGService:
+    """Build the per-request RAG service.
+
+    Deliberately takes NO ``DbSession``. A ``yield`` dependency is unwound only
+    after the response is sent, so injecting a session here would pin a pooled
+    connection for the whole request — across embedding, reranking and the LLM
+    call. ``RAGService`` opens its own short-lived ``db_scope`` blocks instead
+    and releases the connection between them.
+
+    The retriever and LLM singletons are still injected: those are process-wide
+    and expensive to build, unlike a session.
+    """
+    return RAGService(retriever=get_retriever(), llm_service=get_llm_service())
 
 
 def get_history_service(db: DbSession) -> HistoryService:
