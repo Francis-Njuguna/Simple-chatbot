@@ -171,8 +171,23 @@ class RAGService:
 
     @staticmethod
     def _build_sources(chunks: list[RetrievedChunk]) -> list[SourceCitation]:
-        return [
-            SourceCitation(
+        """One citation per *article*, not per chunk.
+
+        Retrieval works in chunks, and several chunks of the same article
+        routinely survive reranking — so mapping chunks straight to citations
+        rendered the same title and URL four or five times in the widget's
+        "Sources & References" list. The user is being pointed at documents, so
+        the article is the right unit.
+
+        Chunks arrive in relevance order; ``dict`` preserves insertion order, so
+        the best-scoring chunk of each article is the one kept and the overall
+        ordering is unchanged.
+        """
+        best: dict[str, SourceCitation] = {}
+        for c in chunks:
+            if c.article_id in best:
+                continue
+            best[c.article_id] = SourceCitation(
                 article_id=c.article_id,
                 title=c.title,
                 url=c.url,
@@ -180,8 +195,7 @@ class RAGService:
                 chunk_index=c.chunk_index,
                 score=c.score,
             )
-            for c in chunks
-        ]
+        return list(best.values())
 
     @staticmethod
     def _build_images(images: list[RetrievedImage]) -> list[ImageResult]:

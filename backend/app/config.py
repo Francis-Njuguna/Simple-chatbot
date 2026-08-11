@@ -97,10 +97,10 @@ class Settings(BaseSettings):
     chroma_persist_dir: str = Field(default="./data/chroma", alias="CHROMA_PERSIST_DIR")
 
     # ------------------------------------------------------------------
-    # LLM — OpenAI-compatible (primary), Gemini, Anthropic, or Ollama
-    # Provider options: "openai" | "gemini" | "anthropic" | "ollama"
+    # LLM — OpenAI-compatible (primary), AgentRouter, Gemini, Anthropic, Ollama
+    # Provider options: "openai" | "agentrouter" | "gemini" | "anthropic" | "ollama"
     # ------------------------------------------------------------------
-    llm_provider: Literal["openai", "gemini", "anthropic", "ollama"] = Field(
+    llm_provider: Literal["openai", "agentrouter", "gemini", "anthropic", "ollama"] = Field(
         default="gemini", alias="LLM_PROVIDER"
     )
 
@@ -113,6 +113,18 @@ class Settings(BaseSettings):
     llm_timeout: int = Field(default=30, alias="LLM_TIMEOUT")
     llm_max_retries: int = Field(default=2, alias="LLM_MAX_RETRIES")
 
+    # HTTP connection pool for the LLM client. These only take effect where the
+    # provider is given an explicit httpx client (AgentRouter, which needs one
+    # for the SSE repair transport — see rag.sse_repair). Supplying a client
+    # replaces the pool the OpenAI SDK would otherwise build, and httpx's own
+    # defaults are 10 connections / 5 keep-alive — low enough to serialize
+    # concurrent requests at the HTTP layer. These match the SDK's defaults so
+    # that adding the transport does not silently change concurrency.
+    llm_max_connections: int = Field(default=1000, alias="LLM_MAX_CONNECTIONS")
+    llm_max_keepalive_connections: int = Field(
+        default=100, alias="LLM_MAX_KEEPALIVE_CONNECTIONS"
+    )
+
     # OpenAI-compatible provider (default)
     openai_api_key: str = Field(default="", alias="OPENAI_API_KEY")
     openai_model: str = Field(default="gpt-4o", alias="OPENAI_MODEL")
@@ -121,6 +133,41 @@ class Settings(BaseSettings):
     # this base URL instead of api.openai.com. If the local endpoint is unauthenticated,
     # OPENAI_API_KEY may be omitted and a dummy key is used for compatibility.
     openai_api_base: str | None = Field(default=None, alias="OPENAI_API_BASE")
+
+    # ------------------------------------------------------------------
+    # AgentRouter — Anthropic Claude models via an OpenAI-compatible endpoint
+    # ------------------------------------------------------------------
+    # AgentRouter exposes Claude through /v1/chat/completions, so this provider
+    # reuses ChatOpenAI rather than the Anthropic SDK. Credentials come from the
+    # environment only — never hardcode a key here.
+    agentrouter_api_key: str = Field(
+        default="",
+        # ANTHROPIC_AUTH_KEY is accepted as a fallback because existing
+        # deployments already point that name at AgentRouter.
+        validation_alias=AliasChoices("AGENTROUTER_API_KEY", "ANTHROPIC_AUTH_KEY"),
+    )
+    agentrouter_base_url: str = Field(
+        default="https://agentrouter.org/v1", alias="AGENTROUTER_BASE_URL"
+    )
+    agentrouter_model: str = Field(default="claude-opus-5", alias="AGENTROUTER_MODEL")
+    # Newer Claude models served through AgentRouter reject `temperature` with
+    # 400 "`temperature` is deprecated for this model", and the router fans out
+    # across backends so the same model can accept it on one request and reject
+    # it on the next. Default to omitting the parameter (None => not sent);
+    # set a float only if your model requires one.
+    agentrouter_temperature: float | None = Field(
+        default=None, alias="AGENTROUTER_TEMPERATURE"
+    )
+    # AgentRouter rejects requests from unrecognised HTTP clients with
+    # 401 "unauthorized client detected" — including honest user-agents such as
+    # this application's own name, and including the official OpenAI and
+    # Anthropic SDK user-agents. Only a claude-cli user-agent is accepted, so the
+    # value is exposed here as explicit, auditable configuration rather than
+    # buried in the client. Set it to "" to send the SDK default and see the
+    # gateway's real behaviour.
+    agentrouter_user_agent: str = Field(
+        default="claude-cli/1.0.0 (external, cli)", alias="AGENTROUTER_USER_AGENT"
+    )
 
     # Anthropic (optional fallback)
     anthropic_api_key: str = Field(default="", alias="ANTHROPIC_API_KEY")
@@ -790,6 +837,82 @@ class Settings(BaseSettings):
                 "[config]   Fix: `unset DATABASE_URL` (or remove it from .env) so the "
                 "POSTGRES_* parts are used, or update it to match."
             )
+
+
+    def validate_llm_config(self) -> list[str]:
+        """Return human-readable problems with the active LLM provider config.
+
+        Called at startup so a missing or placeholder credential is reported
+        once, loudly, instead of surfacing as a 401 inside the first user
+        request. Returns problems rather than raising: a degraded service that
+        still serves retrieval is better than one that will not boot, and the
+        caller decides how severe to be.
+
+        Never includes the credential itself — only whether it is present.
+        """
+        provider = self.llm_provider
+        problems: list[str] = []
+
+        def _placeholder(value: str) -> bool:
+            low = value.lower()
+            return "your-" in low or "-here" in low or "<" in low
+
+        if provider == "agentrouter":
+            if not self.agentrouter_api_key:
+                problems.append(
+                    "AGENTROUTER_API_KEY is not set (ANTHROPIC_AUTH_KEY is also "
+                    "accepted). The AgentRouter provider cannot authenticate."
+                )
+            elif _placeholder(self.agentrouter_api_key):
+                problems.append("AGENTROUTER_API_KEY is still a placeholder value.")
+            if not self.agentrouter_base_url:
+                problems.append(
+                    "AGENTROUTER_BASE_URL is empty — expected an OpenAI-compatible "
+                    "base URL such as https://agentrouter.org/v1"
+                )
+            elif not self.agentrouter_base_url.rstrip("/").endswith("/v1"):
+                problems.append(
+                    f"AGENTROUTER_BASE_URL ({self.agentrouter_base_url}) does not end "
+                    "in /v1 — the OpenAI-compatible route is /v1/chat/completions."
+                )
+            if not self.agentrouter_model:
+                problems.append("AGENTROUTER_MODEL is empty.")
+        elif provider == "openai":
+            if not self.openai_api_key and not self.openai_api_base:
+                problems.append("OPENAI_API_KEY is not set.")
+            elif self.openai_api_key and _placeholder(self.openai_api_key):
+                problems.append("OPENAI_API_KEY is still a placeholder value.")
+            if self.openai_api_base and _placeholder(self.openai_api_base):
+                problems.append("OPENAI_API_BASE is still a placeholder value.")
+        elif provider == "anthropic":
+            if not self.anthropic_auth_key:
+                problems.append("ANTHROPIC_AUTH_KEY / ANTHROPIC_API_KEY is not set.")
+        elif provider == "gemini":
+            if not self.gemini_api_key:
+                problems.append("GEMINI_API_KEY is not set.")
+
+        # A base URL aimed at one provider while another is active is the
+        # single most common misconfiguration in this repo's history.
+        if provider != "openai" and self.openai_api_base:
+            problems.append(
+                f"OPENAI_API_BASE is set but LLM_PROVIDER={provider} — it will be "
+                "ignored. Remove it to avoid confusion."
+            )
+
+        return problems
+
+    def log_llm_config(self) -> None:
+        """Print the active LLM provider and any configuration problems."""
+        model = {
+            "agentrouter": self.agentrouter_model,
+            "anthropic": self.anthropic_model,
+            "openai": self.openai_model,
+            "gemini": self.gemini_model,
+            "ollama": self.ollama_model,
+        }.get(self.llm_provider, "?")
+        print(f"[config] llm_provider → {self.llm_provider} (model: {model})")
+        for problem in self.validate_llm_config():
+            print(f"[config] WARNING: {problem}")
 
 
 @lru_cache

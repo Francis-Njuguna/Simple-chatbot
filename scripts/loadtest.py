@@ -52,7 +52,7 @@ Usage
     ./.venv/Scripts/python.exe -u scripts/loadtest.py --requests-per-user 5
     ./.venv/Scripts/python.exe -u scripts/loadtest.py --cache-realistic
     ./.venv/Scripts/python.exe -u scripts/loadtest.py --json results.json
-    ./.venv/Scripts/python.exe -u scripts/loadtest.py --url http://staging:8000
+    ./.venv/Scripts/python.exe -u scripts/loadtest.py --url http://staging:8001
 """
 
 from __future__ import annotations
@@ -741,7 +741,7 @@ def main() -> int:
         description="Concurrent-user pressure test for the /chat endpoint.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
-    parser.add_argument("--url", default="http://localhost:8000", help="Base server URL")
+    parser.add_argument("--url", default="http://localhost:8001", help="Base server URL")
     parser.add_argument(
         "--levels",
         default="10,20,30,50",

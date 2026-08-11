@@ -93,10 +93,22 @@ async def _warmup() -> None:
         logger.warning("Warm-up: embedding warm-up failed (%s)", exc)
 
     try:
-        get_llm_service()
-        logger.info("Warm-up: LLM client ready.")
+        service = get_llm_service()
+        logger.info(
+            "Warm-up: LLM client ready (provider=%s, model=%s).",
+            settings.llm_provider,
+            service._configured_model(),
+        )
     except Exception as exc:  # noqa: BLE001
-        logger.warning("Warm-up: LLM client build failed (%s)", exc)
+        # Answer generation will fail for every request until this is fixed, so
+        # say exactly that rather than leaving a lone "build failed" line.
+        logger.error(
+            "Warm-up: LLM client build FAILED for provider=%s (%s). Retrieval will "
+            "work but no answers can be generated until the provider config is "
+            "fixed — see the [config] warnings above.",
+            settings.llm_provider,
+            exc,
+        )
 
     try:
         # Opening the collection handle does NOT load the HNSW index — the first
@@ -185,6 +197,9 @@ async def lifespan(app: FastAPI):
     # immediately spot mismatches between .env, docker-compose, and the
     # running Postgres instance without having to dig through config files.
     settings.log_db_config()
+    # Report the active LLM provider and any missing/placeholder credentials
+    # before anything tries to use it.
+    settings.log_llm_config()
 
     await init_db()
     await _warmup()

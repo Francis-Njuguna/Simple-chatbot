@@ -538,9 +538,6 @@ class HybridRetriever:
             trace.n_bm25 = len(lexical_ranking)
             trace.n_vector = len(vector_ranking)
             trace.n_fused = len(fused_ids)
-            trace.timings_ms.update(
-                {k.replace("_ms", ""): v for k, v in timings.items()}
-            )
 
         # --- Stage 4: shortlist for the cross-encoder --------------------
         # Straight top-N by fused RRF score. Deliberately NOT MMR, which used to
@@ -886,6 +883,15 @@ class HybridRetriever:
                 settings.rerank_min_score,
             )
 
+        # Stage timings are copied here, at the END of retrieval, rather than
+        # right after the fuse: `rerank_ms` is recorded further down, so the
+        # earlier copy silently omitted the most expensive retrieval stage from
+        # every trace.
+        if trace is not None:
+            trace.timings_ms.update(
+                {k.replace("_ms", ""): v for k, v in timings.items()}
+            )
+
         if debug:
             self._log_retrieval_debug(query, pool_by_id, vector_ranking,
                                       lexical_ranking, chunks, timings,
@@ -1140,6 +1146,7 @@ class HybridRetriever:
         category: Optional[str] = None,
         query_embedding: Optional[list[float]] = None,
         db: Optional[AsyncSession] = None,
+        trace_sink: Optional[list] = None,
     ) -> tuple[list[RetrievedChunk], list[RetrievedImage], Optional[ProcessedQuery]]:
         """Embed the query ONCE and run text + image retrieval concurrently.
 
@@ -1156,9 +1163,19 @@ class HybridRetriever:
         Returns (chunks, images, processed_query). The ProcessedQuery is needed
         by compute_confidence and confidence_threshold to adapt the threshold
         based on whether preprocessing understood the query.
+
+        ``trace_sink``, when given, receives this request's
+        :class:`RetrievalTrace`. The trace is otherwise only logged, and a
+        caller measuring per-request stage latency cannot read it back out of a
+        log line. It is appended to a caller-owned list rather than stored on
+        the retriever because the retriever is a process-wide singleton, so
+        instance state would hand every concurrent request whichever trace
+        finished last.
         """
         trace = RetrievalTrace(original_query=query, category=category)
         started = time.perf_counter()
+        if trace_sink is not None:
+            trace_sink.append(trace)
 
         t0 = time.perf_counter()
         processed = self._process_query(query) if self.settings.query_rewrite_enabled else None
