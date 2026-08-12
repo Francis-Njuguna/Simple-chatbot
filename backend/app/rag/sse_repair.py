@@ -30,6 +30,26 @@ truncate it. Neither is recoverable once the framing is already lost.
 
 Dropping the frame is safe: a ``data: null`` chunk carries no choices, no delta
 and no usage, so no information is discarded.
+
+Why the stream must be uncompressed
+-----------------------------------
+A transport sees the response body *before* content decoding — ``response.stream``
+at this layer is still whatever the wire carried. AgentRouter negotiates Brotli
+(``content-encoding: br``) when a client advertises it, and httpx advertises it
+by default, so the filter was handed compressed bytes and could never match a
+frame; httpx then decompressed downstream and passed the intact ``data: null``
+to the SDK. Verified against the live gateway: with httpx's default
+``Accept-Encoding`` the raw stream contains 0 readable ``data:`` lines, and with
+``identity`` it contains ~198 lines including 2 real null frames.
+
+So the transport pins ``Accept-Encoding: identity`` on the requests it filters.
+That makes this module's central assumption — that it is reading SSE text — true,
+rather than leaving it as an unstated precondition. Decompressing here instead
+would mean re-implementing httpx's content negotiation and stripping the header
+so it does not decode twice; asking for plaintext is the smaller contract. The
+cost is giving up compression on the LLM response body, which for a token stream
+is a poor trade anyway: frames are tiny and latency-critical, and Brotli buffers
+to fill its window.
 """
 
 from __future__ import annotations
@@ -38,7 +58,14 @@ from typing import AsyncIterator
 
 import httpx
 
+from backend.app.utils.logging import get_logger
+
+logger = get_logger(__name__)
+
 _NULL_FRAME = b"data: null"
+
+# Only these bodies are filtered, and only for them is compression refused.
+_SSE_ROUTE_HINT = "/chat/completions"
 
 
 class _NullFrameFilter(httpx.AsyncByteStream):
@@ -103,15 +130,39 @@ class SSERepairTransport(httpx.AsyncBaseTransport):
     Non-streaming responses are untouched: only bodies whose content type is
     ``text/event-stream`` are wrapped, so ordinary JSON responses — including
     error bodies — pass through byte-for-byte.
+
+    Requests are sent with ``Accept-Encoding: identity`` so the body this
+    transport inspects is SSE text rather than a compressed blob. See the module
+    docstring — without it the filter silently matches nothing.
     """
 
     def __init__(self, inner: httpx.AsyncBaseTransport) -> None:
         self._inner = inner
 
     async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
+        # Refuse compression only on the completions route. Scoping it keeps any
+        # other traffic sharing this client (model lists, health probes) on
+        # normal content negotiation.
+        if _SSE_ROUTE_HINT in request.url.path:
+            request.headers["Accept-Encoding"] = "identity"
+
         response = await self._inner.handle_async_request(request)
         if "text/event-stream" not in response.headers.get("content-type", ""):
             return response
+
+        # If a gateway ignores `identity` and compresses anyway, the filter
+        # cannot read the frames. Passing the body through unfiltered keeps the
+        # stream working (httpx still decodes it) and the null frame will crash
+        # as it did before, which is strictly better than corrupting the bytes.
+        encoding = response.headers.get("content-encoding", "").strip().lower()
+        if encoding and encoding != "identity":
+            logger.error(
+                "SSE stream arrived with content-encoding=%r despite requesting "
+                "identity; null-frame repair is INACTIVE for this response.",
+                encoding,
+            )
+            return response
+
         return httpx.Response(
             status_code=response.status_code,
             headers=response.headers,
