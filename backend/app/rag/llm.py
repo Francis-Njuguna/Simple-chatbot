@@ -10,6 +10,7 @@ Performance notes
 """
 
 
+import time
 from functools import lru_cache
 from typing import Any
 
@@ -43,6 +44,65 @@ class LLMService:
 
         
  
+        if provider == "agentrouter":
+            # AgentRouter fronts Anthropic Claude with an OpenAI-compatible
+            # /v1/chat/completions endpoint, so ChatOpenAI is the client — no
+            # Anthropic SDK involved.
+            from langchain_openai import ChatOpenAI  # lazy import
+
+            api_key = self.settings.agentrouter_api_key
+            if not api_key:
+                raise RuntimeError(
+                    "AGENTROUTER_API_KEY is not set. Set it (or ANTHROPIC_AUTH_KEY) "
+                    "to the Anthropic key issued for AgentRouter."
+                )
+            if "your-" in api_key.lower() or "-here" in api_key.lower():
+                raise RuntimeError(
+                    "AGENTROUTER_API_KEY is still a placeholder. Set a real key."
+                )
+            base_url = self.settings.agentrouter_base_url
+            if not base_url:
+                raise RuntimeError(
+                    "AGENTROUTER_BASE_URL is empty. Set the OpenAI-compatible base "
+                    "URL, e.g. https://agentrouter.org/v1"
+                )
+
+            kwargs: dict[str, Any] = {}
+            # See config.agentrouter_user_agent: the gateway 401s any client it
+            # does not recognise, so the user-agent is part of the contract.
+            if self.settings.agentrouter_user_agent:
+                kwargs["default_headers"] = {
+                    "User-Agent": self.settings.agentrouter_user_agent
+                }
+
+            # AgentRouter emits `data: null` SSE frames that crash the langchain
+            # streaming adapter. See rag.sse_repair for the frame dump and why
+            # the repair belongs at the transport layer.
+            from backend.app.rag.sse_repair import build_repaired_async_client
+
+            kwargs["http_async_client"] = build_repaired_async_client(
+                timeout=self.settings.llm_timeout,
+                max_connections=self.settings.llm_max_connections,
+                max_keepalive=self.settings.llm_max_keepalive_connections,
+            )
+
+            logger.info(
+                "Using AgentRouter model %s via %s",
+                self.settings.agentrouter_model,
+                base_url,
+            )
+            return ChatOpenAI(
+                model=self.settings.agentrouter_model,
+                api_key=api_key,
+                base_url=base_url,
+                # None => the parameter is not sent at all. See config.
+                temperature=self.settings.agentrouter_temperature,
+                max_tokens=max_tokens,
+                timeout=self.settings.llm_timeout,
+                max_retries=self.settings.llm_max_retries,
+                **kwargs,
+            )
+
         if provider == "gemini":
             from langchain_google_genai import ChatGoogleGenerativeAI  # lazy import
 
@@ -196,26 +256,44 @@ class LLMService:
         )
  
     def _use_chat_model(self) -> bool:
-        return self.settings.llm_provider in {"openai", "gemini", "anthropic"}
+        return self.settings.llm_provider in {"openai", "agentrouter", "gemini", "anthropic"}
  
     @staticmethod
-    def _extract_text(content: Any) -> str:
+    def _extract_text(content: Any, *, strip: bool = True) -> str:
+        """Pull plain text out of whatever shape the provider returned.
+
+        ``strip`` is False when consuming a token stream. Stripping a whole
+        answer is right; stripping each delta is not, because the space between
+        two words routinely arrives at the head of a chunk — the frames
+        ``" c"`` and ``"an re"`` are ``" can re"``, and stripping them yields
+        ``"can re"``, silently deleting the word break.
+        """
+        def _clean(value: str) -> str:
+            return value.strip() if strip else value
+
         if content is None:
             return ""
         if isinstance(content, str):
-            return content.strip()
+            return _clean(content)
         if hasattr(content, "content"):
-            return LLMService._extract_text(content.content)
+            return LLMService._extract_text(content.content, strip=strip)
         if hasattr(content, "text"):
-            return str(content.text).strip()
+            return _clean(str(content.text))
         if hasattr(content, "generations"):
-            return LLMService._extract_text(getattr(content, "generations"))
+            return LLMService._extract_text(getattr(content, "generations"), strip=strip)
         if isinstance(content, list):
-            return " ".join(
-                LLMService._extract_text(block) if not isinstance(block, dict) else block.get("text", "")
+            parts = [
+                LLMService._extract_text(block, strip=strip)
+                if not isinstance(block, dict)
+                else block.get("text", "")
                 for block in content
-            ).strip()
-        return str(content).strip()
+            ]
+            # Streaming concatenates: a chunk's blocks are consecutive slices of
+            # one answer, so any separator would insert text the model did not
+            # emit. A complete response's blocks are separate spans, which is
+            # why the non-streaming path keeps the space.
+            return _clean(("" if not strip else " ").join(parts))
+        return _clean(str(content))
  
     def _error_message(self, exc: Exception) -> str:
         """Return a user-facing message describing an LLM *failure*.
@@ -233,10 +311,29 @@ class LLMService:
             detail = (
                 f"the {provider} endpoint rejected the configured credentials"
             )
+            if provider == "agentrouter":
+                # AgentRouter returns 401 for two very different reasons and the
+                # log is the only place the difference is visible: a bad key, or
+                # "unauthorized client detected" when it does not recognise the
+                # HTTP client (see settings.agentrouter_user_agent).
+                detail += (
+                    " (a 401 from AgentRouter means either an invalid "
+                    "AGENTROUTER_API_KEY or a rejected client user-agent)"
+                )
         elif "NotFound" in name:
             detail = (
                 f"the {provider} endpoint does not recognise the configured model "
-                f"({self.settings.anthropic_model if provider == 'anthropic' else 'see config'})"
+                f"({self._configured_model()})"
+            )
+        elif "BadRequest" in name and provider == "agentrouter":
+            # Claude models served through AgentRouter reject `temperature` with
+            # 400 "`temperature` is deprecated for this model", and the router
+            # fans out across backends so the same model may accept it on one
+            # request and reject it on the next.
+            detail = (
+                "the AgentRouter endpoint rejected the request (400). If the log "
+                "mentions `temperature`, set AGENTROUTER_TEMPERATURE to empty in "
+                ".env so the parameter is not sent"
             )
         elif "RateLimit" in name:
             detail = f"the {provider} endpoint is rate limiting requests"
@@ -251,22 +348,98 @@ class LLMService:
             "gap in the knowledge base — please check the server logs."
         )
 
+    def _configured_model(self) -> str:
+        """The model name for the active provider, for diagnostics."""
+        provider = self.settings.llm_provider
+        return {
+            "agentrouter": self.settings.agentrouter_model,
+            "anthropic": self.settings.anthropic_model,
+            "openai": self.settings.openai_model,
+            "gemini": self.settings.gemini_model,
+            "ollama": self.settings.ollama_model,
+        }.get(provider, "see config")
+
+    def describe(self) -> dict[str, Any]:
+        """The request parameters actually in effect, for diagnostics.
+
+        Read off the constructed client rather than off settings, so what is
+        reported is what will really be sent — a provider branch that ignores or
+        overrides a setting cannot hide behind this.
+        """
+        llm = self._llm
+        endpoint = getattr(llm, "openai_api_base", None) or getattr(llm, "base_url", None)
+        info: dict[str, Any] = {
+            "provider": self.settings.llm_provider,
+            "model": self._configured_model(),
+            "endpoint": str(endpoint) if endpoint else "provider default",
+            "max_tokens": getattr(llm, "max_tokens", None),
+            "temperature": getattr(llm, "temperature", None),
+            "timeout": getattr(llm, "request_timeout", None) or getattr(llm, "timeout", None),
+            "max_retries": getattr(llm, "max_retries", None),
+            "streaming": getattr(llm, "streaming", None),
+        }
+        client = getattr(llm, "root_async_client", None)
+        http_client = getattr(client, "_client", None) if client is not None else None
+        limits = getattr(getattr(http_client, "_transport", None), "_pool", None)
+        if limits is not None:
+            info["http_max_connections"] = getattr(limits, "_max_connections", None)
+            info["http_max_keepalive"] = getattr(limits, "_max_keepalive_connections", None)
+        return info
+
+    @staticmethod
+    def _usage(response: Any) -> dict[str, int]:
+        """Input/output token counts, when the provider reports them."""
+        meta = getattr(response, "usage_metadata", None) or {}
+        if not meta:
+            raw = getattr(response, "response_metadata", {}) or {}
+            meta = raw.get("token_usage") or raw.get("usage") or {}
+        if not meta:
+            return {}
+        return {
+            "input_tokens": meta.get("input_tokens") or meta.get("prompt_tokens") or 0,
+            "output_tokens": meta.get("output_tokens") or meta.get("completion_tokens") or 0,
+        }
+
     async def generate_answer(
         self,
         question: str,
         context: str,
         history: str = "No prior conversation.",
         images: str = NO_IMAGES_NOTE,
+        stats: dict[str, Any] | None = None,
     ) -> str:
+        """Generate an answer. Exceptions are returned as text, not raised.
+
+        ``stats``, when supplied, is filled in with prompt size, token usage and
+        call duration. It is a caller-owned dict on purpose: this service is a
+        process-wide singleton, so recording per-request numbers on ``self``
+        would hand every concurrent request whichever value finished last.
+        """
         if self._use_chat_model():
             prompt = self._build_messages(question, context, history, images)
         else:
             prompt = self._build_prompt(question, context, history, images)
 
+        if stats is not None:
+            stats["prompt_chars"] = (
+                sum(len(str(m.content)) for m in prompt)
+                if isinstance(prompt, list)
+                else len(prompt)
+            )
+
+        started = time.perf_counter()
         try:
             response = await self._llm.ainvoke(prompt)
+            if stats is not None:
+                stats["llm_call_ms"] = (time.perf_counter() - started) * 1000.0
+                stats.update(self._usage(response))
+                stats["ok"] = True
             return self._extract_text(response)
         except Exception as exc:
+            if stats is not None:
+                stats["llm_call_ms"] = (time.perf_counter() - started) * 1000.0
+                stats["ok"] = False
+                stats["error"] = type(exc).__name__
             logger.exception("LLM generation failed")
             return self._error_message(exc)
 
@@ -299,7 +472,9 @@ class LLMService:
  
         try:
             async for chunk in self._llm.astream(prompt):
-                text = self._extract_text(chunk)
+                # strip=False: leading/trailing spaces inside a delta are part
+                # of the answer. See _extract_text.
+                text = self._extract_text(chunk, strip=False)
                 if text:
                     yield text
         except Exception as exc:

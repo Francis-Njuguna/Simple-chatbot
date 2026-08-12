@@ -17,6 +17,7 @@ Two roles here, both local and cheap:
 
 import difflib
 import re
+import threading
 from functools import lru_cache
 from typing import Optional
 
@@ -32,6 +33,27 @@ logger = get_logger(__name__)
 # and "re-register" survive as units), drop everything else. BM25 scores are
 # built on exact token hits, so this must match the spelling of what users type.
 _TOKEN_RE = re.compile(r"[a-z0-9]+(?:[''-][a-z0-9]+)*", re.IGNORECASE)
+
+# Field weights for BM25 indexing. Metadata fields are repeated N times so term
+# frequency reflects their importance: a title match outweighs an incidental
+# body mention. Weights are deliberately small — a title should boost, not
+# dominate a chunk that genuinely answers the question.
+#
+# ``title`` is not a Chroma metadata key: the ingest pipeline deliberately drops
+# title/url from Chroma (PostgreSQL owns them, see ``metadata_service``). It is
+# recovered from the ``[Title]`` header the chunker prepends to every chunk
+# body, which is verified present on all of them. Reading it from the text keeps
+# this index buildable from Chroma alone — it is constructed synchronously and
+# lazily on the query path, where no AsyncSession is available.
+_FIELD_WEIGHTS = {
+    "title": 3,
+    "category": 2,
+    "summary": 1,
+    "keywords": 2,
+}
+
+# The ``[Title]`` header the chunker prepends to every chunk body.
+_TITLE_HEADER_RE = re.compile(r"^\s*\[([^\]]{1,200})\]")
 
 
 def tokenize(text: str) -> list[str]:
@@ -60,40 +82,102 @@ class LexicalIndex:
         self._corpus_ids: list[str] = []
         self._corpus_docs: list[str] = []
         self._corpus_meta: dict[str, dict] = {}
+        self._corpus_tokens: list[list[str]] = []
         self._bm25: Optional[BM25Okapi] = None
+        self._vocabulary: Optional[frozenset[str]] = None
+        # Guards the swap in :meth:`rebuild` against readers in :meth:`search`.
+        # Under concurrent load the index is built lazily on the query path, so
+        # without this N simultaneous first-queries each run a full Chroma scan
+        # plus BM25 build, and a reader can observe ``_bm25`` from the new
+        # corpus alongside ``_corpus_ids`` from the old one — which maps scores
+        # onto the wrong chunk ids, or raises IndexError when the corpus shrank.
+        self._lock = threading.RLock()
 
     @property
     def loaded(self) -> bool:
         return self._bm25 is not None
 
     def rebuild(self) -> None:
+        """Rebuild the index from Chroma, publishing the result atomically.
+
+        Everything is computed into locals first and swapped in under the lock
+        as one step, so a concurrent :meth:`search` sees either the whole old
+        index or the whole new one, never a mix of the two.
+        """
         data = fetch_all_text_documents()
         ids = data["ids"]
         documents = data["documents"]
         metadatas = data["metadatas"]
         if not ids:
             logger.warning("LexicalIndex.rebuild: no text documents in Chroma")
-            self._bm25 = None
+            with self._lock:
+                self._bm25 = None
             return
 
-        self._corpus_ids = ids
-        self._corpus_docs = [doc or "" for doc in documents]
-        self._corpus_meta = {
+        corpus_ids = ids
+        corpus_docs = [doc or "" for doc in documents]
+        corpus_meta = {
             cid: meta or {} for cid, meta in zip(ids, metadatas)
         }
-        # Weight the title and category tokens into the chunk's document too:
-        # a query mentioning "moodle" should match a chunk whose title says
-        # Moodle even when the body only says "the LMS". BM25 is pure lexical,
-        # so appending the title gives it the boost embedding-based search gets
-        # for free.
-        weighted = [
-            f"{doc} {self._corpus_meta[cid].get('title', '')} "
-            f"{self._corpus_meta[cid].get('category', '')}"
-            for cid, doc in zip(self._corpus_ids, self._corpus_docs)
-        ]
-        self._bm25 = BM25Okapi([tokenize(d) for d in weighted])
+
+        # Index the article's *identity* alongside its body.
+        #
+        # A chunk's body often never names the system it documents — the LMS
+        # login article says "enter your credentials", not "Moodle" — so a
+        # query naming the system has zero lexical overlap with the very chunk
+        # that answers it. Title, category, summary and keywords carry those
+        # names, so folding them in is what lets BM25 match "Moodle login"
+        # against a body that only says "the portal".
+        #
+        # Fields are repeated ``_FIELD_WEIGHTS`` times rather than appended
+        # once. BM25 scores on term frequency, so repetition is how a pure-
+        # lexical index expresses "a title hit means more than a body hit"
+        # without modifying the scorer. The weights are deliberately small:
+        # a title match should outrank an incidental body mention, not
+        # dominate a chunk that genuinely answers the question.
+        weighted: list[str] = []
+        for cid, doc in zip(corpus_ids, corpus_docs):
+            meta = corpus_meta[cid]
+            parts = [doc]
+            # Title comes from the chunk's own [Title] header, not metadata —
+            # Chroma does not carry it (see _FIELD_WEIGHTS).
+            title_match = _TITLE_HEADER_RE.match(doc)
+            fields = dict(meta)
+            if title_match:
+                fields["title"] = title_match.group(1)
+            for field, weight in _FIELD_WEIGHTS.items():
+                value = str(fields.get(field) or "").strip()
+                if value:
+                    parts.extend([value] * weight)
+            # Synonyms of what the title names, so "LMS login" reaches the
+            # chunk whose title says Moodle. Added once (weight 1): an alias
+            # is weaker evidence than the article's own words.
+            aliases = _aliases_for(
+                " ".join(
+                    str(fields.get(f) or "") for f in ("title", "category", "keywords")
+                )
+            )
+            if aliases:
+                parts.append(" ".join(aliases))
+            weighted.append(" ".join(parts))
+
+        corpus_tokens = [tokenize(d) for d in weighted]
+        bm25 = BM25Okapi(corpus_tokens)
+
+        # Single atomic publish: readers hold the lock for the duration of a
+        # search, so none of them can be midway through scoring when this runs.
+        with self._lock:
+            self._corpus_ids = corpus_ids
+            self._corpus_docs = corpus_docs
+            self._corpus_meta = corpus_meta
+            self._corpus_tokens = corpus_tokens
+            self._bm25 = bm25
+            self._vocabulary = None  # invalidated with the corpus
+
         logger.info(
-            "LexicalIndex rebuilt over %d chunks", len(self._corpus_ids)
+            "LexicalIndex rebuilt over %d chunks (fields=%s)",
+            len(corpus_ids),
+            ",".join(_FIELD_WEIGHTS),
         )
 
     def ensure_loaded(self) -> None:
@@ -102,44 +186,117 @@ class LexicalIndex:
         Called from the query path, so a fresh process (or one whose cache was
         invalidated by a re-ingest) transparently rebuilds instead of silently
         returning no lexical hits.
-        """
-        if self._bm25 is None:
-            self.rebuild()
 
-    def search(self, query: str, k: int = 20) -> list[tuple[str, float]]:
-        """Return [(chunk_id, bm25_score), ...] best-first. Empty corpus → []."""
+        Double-checked under the lock: the first check is the uncontended fast
+        path taken by every warm query, and the second stops N concurrent
+        first-queries from each paying the full Chroma scan and BM25 build.
+        """
+        if self._bm25 is not None:
+            return
+        with self._lock:
+            if self._bm25 is None:
+                self.rebuild()
+
+    def search(
+        self, query: str, k: int = 20, fuzzy: bool = True
+    ) -> list[tuple[str, float]]:
+        """Return [(chunk_id, bm25_score), ...] best-first. Empty corpus → [].
+
+        With ``fuzzy=True``, a query token absent from the corpus vocabulary is
+        replaced by its closest in-vocabulary neighbour before scoring. This is
+        the last line of typo defence: the explicit correction map in
+        :func:`rewrite_query` covers known misspellings, but a novel one
+        ("registartion") would otherwise contribute nothing to a BM25 query
+        whose entire mechanism is exact token match — one typo silently drops
+        the term from the query.
+
+        Matching against the *corpus* vocabulary rather than a dictionary is
+        what makes this safe: the only substitutions available are words this
+        knowledge base actually uses.
+        """
         if not query.strip():
             return []
         self.ensure_loaded()
-        if self._bm25 is None:
+
+        tokens = tokenize(query)
+        if fuzzy:
+            tokens = self._fuzzy_tokens(tokens)
+        if not tokens:
             return []
-        scores = self._bm25.get_scores(tokenize(query))
-        ranked = sorted(
-            range(len(scores)), key=lambda i: scores[i], reverse=True
-        )
-        # Skip zero-scoring tail — no lexical overlap at all.
-        results: list[tuple[str, float]] = []
-        for idx in ranked:
-            if scores[idx] <= 0.0:
-                continue
-            results.append((self._corpus_ids[idx], float(scores[idx])))
-            if len(results) >= k:
-                break
+
+        # Scoring and the id lookup that interprets it must see one consistent
+        # corpus, so both happen under the lock. BM25 over a KB this size is
+        # pure arithmetic in the low milliseconds with no I/O, so holding the
+        # lock across it costs far less than the torn read it prevents.
+        with self._lock:
+            if self._bm25 is None:
+                return []
+            scores = self._bm25.get_scores(tokens)
+            corpus_ids = self._corpus_ids
+            ranked = sorted(
+                range(len(scores)), key=lambda i: scores[i], reverse=True
+            )
+            # Skip zero-scoring tail — no lexical overlap at all.
+            results: list[tuple[str, float]] = []
+            for idx in ranked:
+                if scores[idx] <= 0.0:
+                    continue
+                results.append((corpus_ids[idx], float(scores[idx])))
+                if len(results) >= k:
+                    break
         return results
 
-    def vocabulary(self) -> set[str]:
-        """Distinct corpus tokens — the lexicon fuzzy rewriting checks against."""
+    def _fuzzy_tokens(self, tokens: list[str]) -> list[str]:
+        """Map out-of-vocabulary tokens to their nearest corpus term.
+
+        Short tokens (< 4 chars) are left alone: at that length a single edit
+        reaches too many unrelated words for the match to mean anything.
+        """
+        vocab = self.vocabulary()
+        if not vocab:
+            return tokens
+
+        out: list[str] = []
+        for token in tokens:
+            if token in vocab or len(token) < 4:
+                out.append(token)
+                continue
+            match = difflib.get_close_matches(token, vocab, n=1, cutoff=0.82)
+            if match:
+                logger.debug("BM25 fuzzy token: %r → %r", token, match[0])
+                # Keep both: the original may be a real word missing from this
+                # corpus, and dropping it would lose a genuine constraint.
+                out.extend([token, match[0]])
+            else:
+                out.append(token)
+        return out
+
+    def vocabulary(self) -> frozenset[str]:
+        """Distinct tokens across everything indexed — bodies and metadata.
+
+        Cached with the corpus: this is called once per query on the fuzzy path
+        and recomputing it over every chunk each time would dominate BM25's
+        own cost.
+        """
         self.ensure_loaded()
-        vocab: set[str] = set()
-        for doc in self._corpus_docs:
-            for word in tokenize(doc):
-                if len(word) >= 3:
-                    vocab.add(word)
-        for meta in self._corpus_meta.values():
-            for word in tokenize(meta.get("title", "") or ""):
-                if len(word) >= 3:
-                    vocab.add(word)
-        return vocab
+        if self._vocabulary is not None:
+            return self._vocabulary
+        # Built under the lock against the same corpus snapshot `rebuild` sets
+        # `_vocabulary = None` for; otherwise a rebuild landing mid-loop would
+        # have its invalidation overwritten by the stale set computed here.
+        with self._lock:
+            if self._vocabulary is not None:
+                return self._vocabulary
+            vocab: set[str] = set()
+            # _corpus_tokens is the *weighted* document set, so titles,
+            # categories, summaries, keywords and aliases are all already
+            # present.
+            for tokens in self._corpus_tokens:
+                for word in tokens:
+                    if len(word) >= 3:
+                        vocab.add(word)
+            self._vocabulary = frozenset(vocab)
+            return self._vocabulary
 
 
 @lru_cache(maxsize=1)
@@ -253,3 +410,23 @@ def _lexicon() -> frozenset[str]:
 def invalidate_lexicon() -> None:
     """Clear the cached lexicon after a re-ingest (titles may have changed)."""
     _lexicon.cache_clear()
+
+
+def _aliases_for(text: str) -> list[str]:
+    """Domain synonyms of terms in ``text``, for title/category indexing.
+
+    Returns a flat list of aliases so "LMS login" in a title contributes
+    "Moodle", "Learning Management System", etc. to the chunk's BM25 document.
+    """
+    # Import here to avoid circular dependency — query_processing imports config,
+    # which may indirectly import this module during app init.
+    from backend.app.rag.query_processing import SYNONYM_GROUPS
+
+    aliases: set[str] = set()
+    tokens = set(tokenize(text))
+    for group in SYNONYM_GROUPS:
+        group_lower = [t.lower() for t in group]
+        if any(tok in group_lower for tok in tokens):
+            aliases.update(group)
+    # Remove terms that are already in the input text.
+    return [a for a in aliases if a.lower() not in tokens]

@@ -1,0 +1,148 @@
+[
+  {
+    "name": "embedder_baseline",
+    "config": {
+      "torch_threads": 2
+    },
+    "latency_mean_ms": 256.4008699991973,
+    "latency_std_ms": 633.9450335626784,
+    "latency_p50_ms": 45.069299998431234,
+    "latency_p95_ms": 1213.2240799999613,
+    "latency_p99_ms": 1969.143295998547,
+    "throughput_items_per_sec": 0.0,
+    "accuracy_delta": 0.0,
+    "notes": "Baseline with torch threads=2"
+  },
+  {
+    "name": "embedder_threads_1",
+    "config": {
+      "torch_threads": 1
+    },
+    "latency_mean_ms": 47.73038000021188,
+    "latency_std_ms": 15.666625117627968,
+    "latency_p50_ms": 40.100349999192986,
+    "latency_p95_ms": 76.0306500003935,
+    "latency_p99_ms": 77.20821000089927,
+    "throughput_items_per_sec": 0.0,
+    "accuracy_delta": 0.0,
+    "notes": "torch.set_num_threads(1)"
+  },
+  {
+    "name": "embedder_threads_2",
+    "config": {
+      "torch_threads": 2
+    },
+    "latency_mean_ms": 236.3066700007039,
+    "latency_std_ms": 395.9355374858689,
+    "latency_p50_ms": 67.95140000031097,
+    "latency_p95_ms": 944.4009000020732,
+    "latency_p99_ms": 1296.322500001843,
+    "throughput_items_per_sec": 0.0,
+    "accuracy_delta": 0.0,
+    "notes": "torch.set_num_threads(2)"
+  },
+  {
+    "name": "reranker_baseline",
+    "config": {
+      "torch_threads": 2,
+      "n_passages": 16
+    },
+    "latency_mean_ms": 577.3740600001474,
+    "latency_std_ms": 388.20588485787493,
+    "latency_p50_ms": 543.8680499992188,
+    "latency_p95_ms": 1215.1302849988488,
+    "latency_p99_ms": 1548.6417369980702,
+    "throughput_items_per_sec": 0.0,
+    "accuracy_delta": 0.0,
+    "notes": "Baseline with 16 passages, torch threads=2"
+  },
+  {
+    "name": "reranker_threads_1",
+    "config": {
+      "torch_threads": 1,
+      "n_passages": 16
+    },
+    "latency_mean_ms": 339.1049699992436,
+    "latency_std_ms": 90.04577057166823,
+    "latency_p50_ms": 311.395699998684,
+    "latency_p95_ms": 478.05020000014304,
+    "latency_p99_ms": 582.5481199995556,
+    "throughput_items_per_sec": 0.0,
+    "accuracy_delta": 0.0,
+    "notes": "torch.set_num_threads(1)"
+  },
+  {
+    "name": "reranker_threads_2",
+    "config": {
+      "torch_threads": 2,
+      "n_passages": 16
+    },
+    "latency_mean_ms": 300.77770999923814,
+    "latency_std_ms": 108.48946493031112,
+    "latency_p50_ms": 252.54574999962642,
+    "latency_p95_ms": 505.40293500052917,
+    "latency_p99_ms": 572.6832270013256,
+    "throughput_items_per_sec": 0.0,
+    "accuracy_delta": 0.0,
+    "notes": "torch.set_num_threads(2)"
+  },
+  {
+    "name": "reranker_shortlist_8",
+    "config": {
+      "n_passages": 8
+    },
+    "latency_mean_ms": 265.2570200003538,
+    "latency_std_ms": 81.576467110703,
+    "latency_p50_ms": 265.0821999995969,
+    "latency_p95_ms": 406.48633499949926,
+    "latency_p99_ms": 436.44758699956583,
+    "throughput_items_per_sec": 0.0,
+    "accuracy_delta": 0.0,
+    "notes": "Reduced shortlist to 8 passages"
+  },
+  {
+    "name": "reranker_query_forms_1",
+    "config": {
+      "query_forms": 1,
+      "n_passages": 16
+    },
+    "latency_mean_ms": 447.7688400005718,
+    "latency_std_ms": 86.18116985815902,
+    "latency_p50_ms": 418.9619999997376,
+    "latency_p95_ms": 611.9854150021637,
+    "latency_p99_ms": 641.0105230025147,
+    "throughput_items_per_sec": 0.0,
+    "accuracy_delta": 0.0,
+    "notes": "Scoring 1 query form(s), 16 passages each"
+  },
+  {
+    "name": "reranker_query_forms_2",
+    "config": {
+      "query_forms": 2,
+      "n_passages": 16
+    },
+    "latency_mean_ms": 1028.8995000002615,
+    "latency_std_ms": 192.68269061828806,
+    "latency_p50_ms": 949.7285000015836,
+    "latency_p95_ms": 1383.0786499996973,
+    "latency_p99_ms": 1490.403649998807,
+    "throughput_items_per_sec": 0.0,
+    "accuracy_delta": 0.0,
+    "notes": "Scoring 2 query form(s), 16 passages each"
+  },
+  {
+    "name": "reranker_combined_8_1form",
+    "config": {
+      "n_passages": 8,
+      "query_forms": 1
+    },
+    "latency_mean_ms": 178.6481899995124,
+    "latency_std_ms": 75.5146312151675,
+    "latency_p50_ms": 135.33580000148504,
+    "latency_p95_ms": 313.6563499989279,
+    "latency_p99_ms": 313.8338299987663,
+    "throughput_items_per_sec": 0.0,
+    "accuracy_delta": 0.0,
+    "notes": "Shortlist=8, query_forms=1 (4\u00d7 reduction from baseline 16\u00d72)"
+  }
+]

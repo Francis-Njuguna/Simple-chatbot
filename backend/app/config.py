@@ -47,6 +47,13 @@ class Settings(BaseSettings):
     jwt_algorithm: str = Field(default="HS256", alias="JWT_ALGORITHM")
     jwt_expire_minutes: int = Field(default=1440, alias="JWT_EXPIRE_MINUTES")
     rate_limit: str = Field(default="30/minute", alias="RATE_LIMIT")
+    # Separate, tighter budget for the chat endpoints, which are the only ones
+    # that cost a retrieval pass plus an LLM call. Kept configurable so a load
+    # test can raise it for the duration of a run: with a hardcoded limit, every
+    # concurrency level above it measures the rate limiter rather than the
+    # server's actual capacity. Read once at route-import time (slowapi's
+    # decorator takes a literal), so changing it needs a server restart.
+    chat_rate_limit: str = Field(default="20/minute", alias="CHAT_RATE_LIMIT")
 
     # ------------------------------------------------------------------
     # PostgreSQL — individual credential components
@@ -90,10 +97,10 @@ class Settings(BaseSettings):
     chroma_persist_dir: str = Field(default="./data/chroma", alias="CHROMA_PERSIST_DIR")
 
     # ------------------------------------------------------------------
-    # LLM — OpenAI-compatible (primary), Gemini, Anthropic, or Ollama
-    # Provider options: "openai" | "gemini" | "anthropic" | "ollama"
+    # LLM — OpenAI-compatible (primary), AgentRouter, Gemini, Anthropic, Ollama
+    # Provider options: "openai" | "agentrouter" | "gemini" | "anthropic" | "ollama"
     # ------------------------------------------------------------------
-    llm_provider: Literal["openai", "gemini", "anthropic", "ollama"] = Field(
+    llm_provider: Literal["openai", "agentrouter", "gemini", "anthropic", "ollama"] = Field(
         default="gemini", alias="LLM_PROVIDER"
     )
 
@@ -106,6 +113,18 @@ class Settings(BaseSettings):
     llm_timeout: int = Field(default=30, alias="LLM_TIMEOUT")
     llm_max_retries: int = Field(default=2, alias="LLM_MAX_RETRIES")
 
+    # HTTP connection pool for the LLM client. These only take effect where the
+    # provider is given an explicit httpx client (AgentRouter, which needs one
+    # for the SSE repair transport — see rag.sse_repair). Supplying a client
+    # replaces the pool the OpenAI SDK would otherwise build, and httpx's own
+    # defaults are 10 connections / 5 keep-alive — low enough to serialize
+    # concurrent requests at the HTTP layer. These match the SDK's defaults so
+    # that adding the transport does not silently change concurrency.
+    llm_max_connections: int = Field(default=1000, alias="LLM_MAX_CONNECTIONS")
+    llm_max_keepalive_connections: int = Field(
+        default=100, alias="LLM_MAX_KEEPALIVE_CONNECTIONS"
+    )
+
     # OpenAI-compatible provider (default)
     openai_api_key: str = Field(default="", alias="OPENAI_API_KEY")
     openai_model: str = Field(default="gpt-4o", alias="OPENAI_MODEL")
@@ -114,6 +133,41 @@ class Settings(BaseSettings):
     # this base URL instead of api.openai.com. If the local endpoint is unauthenticated,
     # OPENAI_API_KEY may be omitted and a dummy key is used for compatibility.
     openai_api_base: str | None = Field(default=None, alias="OPENAI_API_BASE")
+
+    # ------------------------------------------------------------------
+    # AgentRouter — Anthropic Claude models via an OpenAI-compatible endpoint
+    # ------------------------------------------------------------------
+    # AgentRouter exposes Claude through /v1/chat/completions, so this provider
+    # reuses ChatOpenAI rather than the Anthropic SDK. Credentials come from the
+    # environment only — never hardcode a key here.
+    agentrouter_api_key: str = Field(
+        default="",
+        # ANTHROPIC_AUTH_KEY is accepted as a fallback because existing
+        # deployments already point that name at AgentRouter.
+        validation_alias=AliasChoices("AGENTROUTER_API_KEY", "ANTHROPIC_AUTH_KEY"),
+    )
+    agentrouter_base_url: str = Field(
+        default="https://agentrouter.org/v1", alias="AGENTROUTER_BASE_URL"
+    )
+    agentrouter_model: str = Field(default="claude-opus-5", alias="AGENTROUTER_MODEL")
+    # Newer Claude models served through AgentRouter reject `temperature` with
+    # 400 "`temperature` is deprecated for this model", and the router fans out
+    # across backends so the same model can accept it on one request and reject
+    # it on the next. Default to omitting the parameter (None => not sent);
+    # set a float only if your model requires one.
+    agentrouter_temperature: float | None = Field(
+        default=None, alias="AGENTROUTER_TEMPERATURE"
+    )
+    # AgentRouter rejects requests from unrecognised HTTP clients with
+    # 401 "unauthorized client detected" — including honest user-agents such as
+    # this application's own name, and including the official OpenAI and
+    # Anthropic SDK user-agents. Only a claude-cli user-agent is accepted, so the
+    # value is exposed here as explicit, auditable configuration rather than
+    # buried in the client. Set it to "" to send the SDK default and see the
+    # gateway's real behaviour.
+    agentrouter_user_agent: str = Field(
+        default="claude-cli/1.0.0 (external, cli)", alias="AGENTROUTER_USER_AGENT"
+    )
 
     # Anthropic (optional fallback)
     anthropic_api_key: str = Field(default="", alias="ANTHROPIC_API_KEY")
@@ -192,10 +246,64 @@ class Settings(BaseSettings):
     top_k_retrieval: int = Field(default=5, alias="TOP_K_RETRIEVAL")
     top_k_images: int = Field(default=3, alias="TOP_K_IMAGES")
 
+    # ------------------------------------------------------------------
+    # Adaptive chunk retrieval
+    #
+    # A fixed top_k is wrong in both directions. When retrieval is confident,
+    # every chunk after the first two or three is near-duplicate material the
+    # model has to reconcile, and reconciling it is where hedged and padded
+    # answers come from. When retrieval is unsure, three chunks is too thin a
+    # base to answer from at all — the useful passage is somewhere in the tail.
+    #
+    # So the count follows the confidence: high confidence narrows, low
+    # confidence widens. Procedural questions ("how do I set up...") widen
+    # further, because their answer is a numbered walkthrough split across
+    # sibling chunks and truncating it mid-sequence produces a partial answer
+    # that reads as complete — the worst failure mode available here.
+    #
+    # This never changes what is RETRIEVED, only how much of the (already
+    # ranked, already gated) result is passed on. Every chunk it selects has
+    # cleared the cosine floor and the cross-encoder gate exactly as before.
+    # ------------------------------------------------------------------
+    adaptive_retrieval_enabled: bool = Field(
+        default=True, alias="ADAPTIVE_RETRIEVAL_ENABLED"
+    )
+    # Confidence at or above which retrieval is treated as unambiguous, and the
+    # narrow chunk count applies. Confidence here is mean cosine over the kept
+    # chunks, so these are on the same 0-1 scale as min_relevance_score.
+    adaptive_high_confidence: float = Field(
+        default=0.62, alias="ADAPTIVE_HIGH_CONFIDENCE"
+    )
+    adaptive_medium_confidence: float = Field(
+        default=0.45, alias="ADAPTIVE_MEDIUM_CONFIDENCE"
+    )
+    # Chunk counts per confidence band.
+    adaptive_chunks_high: int = Field(default=3, alias="ADAPTIVE_CHUNKS_HIGH")
+    adaptive_chunks_medium: int = Field(default=5, alias="ADAPTIVE_CHUNKS_MEDIUM")
+    adaptive_chunks_low: int = Field(default=8, alias="ADAPTIVE_CHUNKS_LOW")
+    # Extra chunks granted when the intent classifier flags the question as
+    # procedural. Added to whichever band applies, then clamped to the ceiling.
+    adaptive_procedural_bonus: int = Field(
+        default=2, alias="ADAPTIVE_PROCEDURAL_BONUS"
+    )
+    # Hard ceiling. The candidate loop materialises up to this many chunks
+    # before the band is chosen, so raising it costs Postgres hydration and
+    # prompt tokens, not retrieval time.
+    adaptive_max_chunks: int = Field(default=10, alias="ADAPTIVE_MAX_CHUNKS")
+
     # MMR trade-off: 1.0 = pure relevance, 0.0 = pure diversity.
-    # Was 0.3, which weighted diversity 70/30 over relevance — backwards for
-    # help-desk QA, where the user wants the *most correct* passage first and
-    # diversity only matters for breaking up near-duplicate chunks.
+    #
+    # RETAINED FOR COMPATIBILITY, NO LONGER ON THE RETRIEVAL PATH. MMR used to
+    # select the cross-encoder shortlist; it now selects nothing, because
+    # optimising diversity *before* the only stage that judges relevance drops
+    # chunks that answer the question. Measured on this KB, replacing it with
+    # top-N by fused RRF rank moved recall@1 18/20 → 19/20 and recall@k 19/20 →
+    # 20/20 with off-topic leakage unchanged (see the Stage 4 comment in
+    # retriever.py). Redundancy is handled downstream instead, by exact-text
+    # dedup and by group_adjacent_chunks merging sibling chunks into one block.
+    #
+    # _mmr_select_vectorised is kept as a tested utility for callers that want a
+    # diversity-aware selection over an already-relevant set.
     mmr_diversity: float = Field(default=0.7, alias="MMR_DIVERSITY")
 
     # ------------------------------------------------------------------
@@ -215,12 +323,28 @@ class Settings(BaseSettings):
     # keeps any single engine's #1 hit from dominating the fused order.
     rrf_k: int = Field(default=60, alias="RRF_K")
 
-    # Candidates pulled from each engine before MMR/rerank narrow them down.
-    # Must exceed mmr_shortlist or MMR has nothing to choose between — the old
-    # code passed k == pool size, which made MMR a no-op.
-    retrieval_candidate_pool: int = Field(default=30, alias="RETRIEVAL_CANDIDATE_POOL")
-    # How many survive MMR and go to the (more expensive) cross-encoder.
-    mmr_shortlist: int = Field(default=12, alias="MMR_SHORTLIST")
+    # Candidates pulled from each engine before the shortlist narrows them down.
+    # Must exceed rerank_shortlist, or the shortlist is the whole pool and the
+    # wider retrieval buys nothing.
+    #
+    # 40 (was 30): multi-query retrieval unions candidates from several query
+    # variants, and the pool has to be wide enough that a chunk only the third
+    # variant found still gets in. Cost is bounded — widening the pool adds
+    # Chroma read time, not cross-encoder time, which is what actually dominates
+    # latency (the shortlist gates that).
+    retrieval_candidate_pool: int = Field(default=40, alias="RETRIEVAL_CANDIDATE_POOL")
+    # How many fused candidates go to the (more expensive) cross-encoder.
+    # 16 (was 12): a wider pool is pointless if the shortlist re-narrows it
+    # before the cross-encoder — which is the only stage that can tell a
+    # genuine answer from a vocabulary match — but this is the stage that costs
+    # real milliseconds, so it grows more conservatively than the pool.
+    #
+    # Named MMR_SHORTLIST historically, when MMR chose these. It is now a plain
+    # top-N cut of the fused RRF ranking; the env alias is kept so existing
+    # deployments do not silently fall back to the default.
+    rerank_shortlist: int = Field(
+        default=16, validation_alias=AliasChoices("RERANK_SHORTLIST", "MMR_SHORTLIST")
+    )
 
     # ------------------------------------------------------------------
     # Cross-encoder reranking
@@ -234,6 +358,13 @@ class Settings(BaseSettings):
     rerank_model: str = Field(
         default="cross-encoder/ms-marco-MiniLM-L-6-v2", alias="RERANK_MODEL"
     )
+    # Replace the cross-encoder's Linear layers with dynamic int8 at load time.
+    # Reranking is ~84% of retrieval wall time and the ways to score fewer pairs
+    # all cost recall, so cheaper-per-pair is the only remaining CPU lever.
+    # Measured 1.25x with identical top-1 and top-5 on a 16-chunk probe, but it
+    # DOES perturb the tail ordering, so it stays off until the full eval set
+    # confirms no recall regression. Off is always safe: fp32 is slower, correct.
+    rerank_quantize: bool = Field(default=False, alias="RERANK_QUANTIZE")
     # Absolute relevance gate on the cross-encoder logit. Unlike cosine, this
     # score reflects whether a passage *answers* the query, so it can reject
     # material that merely shares vocabulary with it.
@@ -247,12 +378,201 @@ class Settings(BaseSettings):
     # Set to a large negative number (e.g. -1e9) to disable the gate.
     rerank_min_score: float = Field(default=-8.0, alias="RERANK_MIN_SCORE")
 
+    # Share of the final ORDERING given to the cross-encoder, the remainder going
+    # to the fused RRF rank. The gate above is unaffected — it is always the
+    # cross-encoder alone.
+    #
+    # Splitting these apart is the point: this model is excellent at judging
+    # whether a passage answers the question at all (it declines every genuinely
+    # off-topic query) and noisy at ranking two passages that both do. Measured
+    # on "Can't access LMS", ordering by its score alone put the Microsoft Teams
+    # chunk (+1.27) above the actual "How to login to LMS" chunk (-1.43) and
+    # pushed the right answer past top_k, while RRF had it at #1. Over 30
+    # paraphrase/synonym/typo queries, any blend recovered recall@k 29/30 → 30/30
+    # with off-topic precision unchanged; 0.5 is the midpoint rather than a value
+    # fitted to that set. 1.0 restores pure cross-encoder ordering.
+    rerank_order_weight: float = Field(default=0.5, alias="RERANK_ORDER_WEIGHT")
+
+    # How many phrasings of the question the cross-encoder scores, keeping the
+    # best score per chunk. This is a recall/precision dial, not a free win.
+    #
+    # This cross-encoder is very sensitive to surface wording: on this KB the
+    # same six login passages score +5.5/+7.6 for "LMS login" but -8.7/-10.8 for
+    # "Moodle login", because the article is titled "How to login to LMS". With
+    # one phrasing the gate is partly a test of whether the user guessed the
+    # article's own vocabulary.
+    #
+    # Measured over 21 on-topic and 8 off-topic queries:
+    #   1 form  → 19/21 on-topic (90.5%), 8/8 off-topic blocked
+    #   2 forms → 21/21 on-topic (100%),  8/8 off-topic blocked
+    #   3 forms → 21/21 on-topic,         6/8 off-topic ("weather tomorrow"
+    #             and "quantum entanglement" cleared the gate at -7.0/-7.1)
+    # Each extra phrasing is another attempt against a fixed threshold, so
+    # raising this past 2 buys nothing and costs off-topic precision.
+    rerank_query_forms: int = Field(default=2, alias="RERANK_QUERY_FORMS")
+
+    # ------------------------------------------------------------------
+    # Intent-aware boosting
+    #
+    # When intent classification detects what the user is trying to do (password
+    # reset, login trouble, exam proctoring), boost_terms from the matched intent
+    # are used to nudge chunks containing those terms higher in the final
+    # ordering. This is a BOOST, never a filter — chunks with no boost terms are
+    # ranked lower, not removed, exactly as the user's constraints specify.
+    # ------------------------------------------------------------------
+    # Weight given to the intent boost in the final ordering blend. 0.0 disables
+    # boosting entirely; 0.15 adds a small nudge; higher values give intent
+    # matching more pull. Must be tuned against off-topic precision — too high
+    # and a chunk with boost-term overlap but wrong semantics can overtake the
+    # right answer.
+    intent_boost_weight: float = Field(default=0.15, alias="INTENT_BOOST_WEIGHT")
+
+    # ------------------------------------------------------------------
+    # Article-level scoring
+    #
+    # Chunk ranking alone has a structural blind spot: it judges each chunk in
+    # isolation, so a single strong chunk from an article that is otherwise
+    # irrelevant outranks the second-best chunk of the article that actually
+    # documents the answer. The result is a context window assembled from four
+    # different articles, each contributing one fragment, none contributing
+    # enough to answer from.
+    #
+    # Aggregating chunk scores per article and ranking ARTICLES first fixes
+    # that. The article that answers the question is usually the one with
+    # several good chunks, not one lucky one — and once it is identified, its
+    # own best chunks are the right context, in their original order.
+    # ------------------------------------------------------------------
+    article_scoring_enabled: bool = Field(
+        default=True, alias="ARTICLE_SCORING_ENABLED"
+    )
+    # How an article's score is derived from its chunks' ordering scores.
+    #   "max"   — the article's single best chunk. Rewards one excellent match.
+    #   "mean"  — average across its retrieved chunks. Rewards breadth, but
+    #             penalises a long article whose tail chunks are off-topic.
+    #   "blend" — max plus a fraction of the mean (see article_mean_weight).
+    #             Prefers an article that is both strongly and broadly relevant
+    #             without letting either signal dominate. This is the default
+    #             because both failure modes above are real on this KB.
+    article_score_strategy: Literal["max", "mean", "blend"] = Field(
+        default="blend", alias="ARTICLE_SCORE_STRATEGY"
+    )
+    # Weight of the mean term when strategy is "blend". The max term is always
+    # weighted 1.0, so this is the *relative* pull of breadth over peak.
+    article_mean_weight: float = Field(default=0.4, alias="ARTICLE_MEAN_WEIGHT")
+    # How many top-ranked articles may contribute chunks. 1 forces a single
+    # source (cleanest context, but wrong when the answer genuinely spans two
+    # articles — SMOWL is documented across four here). 2-3 keeps the context
+    # focused while allowing a legitimately multi-article answer.
+    article_top_n: int = Field(default=3, alias="ARTICLE_TOP_N")
+    # Maximum chunks taken from any single article, so one long article cannot
+    # consume the entire budget and crowd out a second relevant source.
+    article_max_chunks_each: int = Field(
+        default=4, alias="ARTICLE_MAX_CHUNKS_EACH"
+    )
+
+    # ------------------------------------------------------------------
+    # Domain knowledge configuration
+    # ------------------------------------------------------------------
+    # Path to the YAML file containing domain-specific synonyms, intents, spelling
+    # corrections, and acronyms. Falls back to built-in defaults when absent.
+    domain_knowledge_path: Optional[str] = Field(
+        default="config/domain_knowledge.yaml", alias="DOMAIN_KNOWLEDGE_PATH"
+    )
+
+    # ------------------------------------------------------------------
+    # Dynamic confidence threshold
+    #
+    # Confidence gates whether the model attempts to answer from retrieved
+    # context or declines. A fixed threshold is wrong in both directions: too
+    # high rejects questions the system could answer (false negatives), too low
+    # accepts off-topic material and produces hallucinated answers.
+    #
+    # A query the preprocessing layer *understood* — one where it detected a
+    # known entity, matched an intent, corrected a typo, or expanded a synonym —
+    # has vocabulary mismatch already corrected for. Its cosine score reflects
+    # semantic relevance, not a vocabulary gap, so a slightly lower bar is safe.
+    # An unrecognised query gets the baseline: if retrieval is mediocre, the KB
+    # likely does not cover it.
+    # ------------------------------------------------------------------
+    confidence_threshold_enabled: bool = Field(
+        default=True, alias="CONFIDENCE_THRESHOLD_ENABLED"
+    )
+    # Baseline threshold for queries the system did not recognise.
+    confidence_threshold_baseline: float = Field(
+        default=0.35, alias="CONFIDENCE_THRESHOLD_BASELINE"
+    )
+    # Threshold for queries where preprocessing detected a known entity, matched
+    # an intent, corrected spelling, or expanded a synonym. Lower than baseline
+    # because vocabulary mismatch is already handled — the remaining cosine gap
+    # is semantic, not lexical.
+    confidence_threshold_understood: float = Field(
+        default=0.30, alias="CONFIDENCE_THRESHOLD_UNDERSTOOD"
+    )
+
+    # ------------------------------------------------------------------
+    # Context assembly
+    #
+    # The flat per-chunk layout repeats an article's title, category, summary
+    # and URL once per excerpt. For a procedural article contributing four
+    # chunks that is four identical headers, which costs prompt budget and
+    # reads to the model as four separate sources agreeing with each other —
+    # false corroboration.
+    #
+    # Article-centric assembly emits each article once, with its excerpts
+    # merged underneath in original chunk order, so a procedure split across
+    # chunks arrives as one continuous numbered sequence. This changes only
+    # how retrieved material is *rendered*; retrieval, ranking and gating are
+    # untouched. Set to False to fall back to the flat per-chunk layout.
+    # ------------------------------------------------------------------
+    article_context_format: bool = Field(
+        default=True, alias="ARTICLE_CONTEXT_FORMAT"
+    )
+
     # ------------------------------------------------------------------
     # Query preprocessing + retrieval cache
     # ------------------------------------------------------------------
     # Fuzzy-corrects domain terms ("smwol" → "smowl") against the KB vocabulary.
     # Purely local (difflib) — no LLM call, so it costs well under a millisecond.
     query_rewrite_enabled: bool = Field(default=True, alias="QUERY_REWRITE_ENABLED")
+
+    # --- Query preprocessing stages (see rag/query_processing.py) ---
+    # Each stage is separately switchable so a recall change can be attributed
+    # to one specific stage in the benchmark rather than to "preprocessing".
+    #
+    # Normalisation: lowercase, strip punctuation, correct spelling, expand
+    # abbreviations ("pwd" → "password"), canonicalise acronym casing.
+    query_normalization_enabled: bool = Field(
+        default=True, alias="QUERY_NORMALIZATION_ENABLED"
+    )
+    # Synonym expansion feeds BM25 ONLY. The vector query keeps the normalised
+    # text and the cross-encoder keeps the user's original wording — appending
+    # a bag of synonyms to either degrades it (see query_processing docstring).
+    query_synonym_expansion_enabled: bool = Field(
+        default=True, alias="QUERY_SYNONYM_EXPANSION_ENABLED"
+    )
+    # Multi-query: embed several paraphrases and fuse their rankings, so
+    # retrieval stops depending on the user's exact phrasing.
+    multi_query_enabled: bool = Field(default=True, alias="MULTI_QUERY_ENABLED")
+    # Paraphrases *in addition to* the normalised query. Each costs one
+    # embedding (~5-15ms local) plus one Chroma read; 4 keeps the whole
+    # preprocessing budget well inside the 3s latency target.
+    multi_query_variants: int = Field(default=4, alias="MULTI_QUERY_VARIANTS")
+    # Weight of a variant's ranking relative to the primary query's in RRF.
+    # Below 1.0 because a paraphrase is derived evidence: it should be able to
+    # rescue a chunk the original phrasing missed, but never outvote it.
+    multi_query_variant_weight: float = Field(
+        default=0.5, alias="MULTI_QUERY_VARIANT_WEIGHT"
+    )
+    # BM25 fuzzy token matching: map an out-of-vocabulary query token to its
+    # nearest *corpus* term before scoring. Catches typos the explicit
+    # correction map never enumerated.
+    lexical_fuzzy_enabled: bool = Field(default=True, alias="LEXICAL_FUZZY_ENABLED")
+
+    # Merge chunks from the same article into one context block, in document
+    # order, before the prompt is built. Adjacent chunks split mid-procedure
+    # otherwise arrive as disconnected fragments in arbitrary rerank order.
+    group_adjacent_chunks: bool = Field(default=True, alias="GROUP_ADJACENT_CHUNKS")
+
     # Seconds to cache a full retrieval result keyed by normalised query.
     retrieval_cache_ttl: int = Field(default=300, alias="RETRIEVAL_CACHE_TTL")
     retrieval_cache_size: int = Field(default=256, alias="RETRIEVAL_CACHE_SIZE")
@@ -517,6 +837,82 @@ class Settings(BaseSettings):
                 "[config]   Fix: `unset DATABASE_URL` (or remove it from .env) so the "
                 "POSTGRES_* parts are used, or update it to match."
             )
+
+
+    def validate_llm_config(self) -> list[str]:
+        """Return human-readable problems with the active LLM provider config.
+
+        Called at startup so a missing or placeholder credential is reported
+        once, loudly, instead of surfacing as a 401 inside the first user
+        request. Returns problems rather than raising: a degraded service that
+        still serves retrieval is better than one that will not boot, and the
+        caller decides how severe to be.
+
+        Never includes the credential itself — only whether it is present.
+        """
+        provider = self.llm_provider
+        problems: list[str] = []
+
+        def _placeholder(value: str) -> bool:
+            low = value.lower()
+            return "your-" in low or "-here" in low or "<" in low
+
+        if provider == "agentrouter":
+            if not self.agentrouter_api_key:
+                problems.append(
+                    "AGENTROUTER_API_KEY is not set (ANTHROPIC_AUTH_KEY is also "
+                    "accepted). The AgentRouter provider cannot authenticate."
+                )
+            elif _placeholder(self.agentrouter_api_key):
+                problems.append("AGENTROUTER_API_KEY is still a placeholder value.")
+            if not self.agentrouter_base_url:
+                problems.append(
+                    "AGENTROUTER_BASE_URL is empty — expected an OpenAI-compatible "
+                    "base URL such as https://agentrouter.org/v1"
+                )
+            elif not self.agentrouter_base_url.rstrip("/").endswith("/v1"):
+                problems.append(
+                    f"AGENTROUTER_BASE_URL ({self.agentrouter_base_url}) does not end "
+                    "in /v1 — the OpenAI-compatible route is /v1/chat/completions."
+                )
+            if not self.agentrouter_model:
+                problems.append("AGENTROUTER_MODEL is empty.")
+        elif provider == "openai":
+            if not self.openai_api_key and not self.openai_api_base:
+                problems.append("OPENAI_API_KEY is not set.")
+            elif self.openai_api_key and _placeholder(self.openai_api_key):
+                problems.append("OPENAI_API_KEY is still a placeholder value.")
+            if self.openai_api_base and _placeholder(self.openai_api_base):
+                problems.append("OPENAI_API_BASE is still a placeholder value.")
+        elif provider == "anthropic":
+            if not self.anthropic_auth_key:
+                problems.append("ANTHROPIC_AUTH_KEY / ANTHROPIC_API_KEY is not set.")
+        elif provider == "gemini":
+            if not self.gemini_api_key:
+                problems.append("GEMINI_API_KEY is not set.")
+
+        # A base URL aimed at one provider while another is active is the
+        # single most common misconfiguration in this repo's history.
+        if provider != "openai" and self.openai_api_base:
+            problems.append(
+                f"OPENAI_API_BASE is set but LLM_PROVIDER={provider} — it will be "
+                "ignored. Remove it to avoid confusion."
+            )
+
+        return problems
+
+    def log_llm_config(self) -> None:
+        """Print the active LLM provider and any configuration problems."""
+        model = {
+            "agentrouter": self.agentrouter_model,
+            "anthropic": self.anthropic_model,
+            "openai": self.openai_model,
+            "gemini": self.gemini_model,
+            "ollama": self.ollama_model,
+        }.get(self.llm_provider, "?")
+        print(f"[config] llm_provider → {self.llm_provider} (model: {model})")
+        for problem in self.validate_llm_config():
+            print(f"[config] WARNING: {problem}")
 
 
 @lru_cache

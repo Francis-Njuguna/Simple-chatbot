@@ -99,7 +99,7 @@ async def main() -> None:
         # cache is bypassed by using distinct queries, so these are cold numbers.
         async with async_session_factory() as db:
             t0 = time.perf_counter()
-            chunks, images = await retriever.retrieve(query, db=db)
+            chunks, images, _processed = await retriever.retrieve(query, db=db)
             t_retrieval = (time.perf_counter() - t0) * 1000
 
             t_llm = 0.0

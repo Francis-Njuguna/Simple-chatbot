@@ -29,7 +29,7 @@ async def main() -> None:
         t_embed = time.perf_counter() - t0
 
         t0 = time.perf_counter()
-        chunks, images = await r.retrieve(q, query_embedding=qe)
+        chunks, images, _processed = await r.retrieve(q, query_embedding=qe)
         t_ret = time.perf_counter() - t0
 
         ctx = r.format_context(chunks)

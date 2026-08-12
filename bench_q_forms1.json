@@ -1,0 +1,1398 @@
+{
+  "summary": {
+    "covered": {
+      "n": 17,
+      "recall": 1.0,
+      "precision": 0.6677871148459383,
+      "confidence": 0.6216117647058824,
+      "chunks": 3.9411764705882355
+    },
+    "synonym": {
+      "n": 12,
+      "recall": 0.75,
+      "precision": 0.6777777777777778,
+      "confidence": 0.5252666666666667,
+      "chunks": 2.5
+    },
+    "typo": {
+      "n": 8,
+      "recall": 0.875,
+      "precision": 0.65,
+      "confidence": 0.5039,
+      "chunks": 3.75
+    },
+    "conversational": {
+      "n": 5,
+      "recall": 1.0,
+      "precision": 0.88,
+      "confidence": 0.55674,
+      "chunks": 4.2
+    },
+    "short": {
+      "n": 5,
+      "recall": 1.0,
+      "precision": 0.5266666666666666,
+      "confidence": 0.55188,
+      "chunks": 4.8
+    },
+    "long": {
+      "n": 3,
+      "recall": 1.0,
+      "precision": 0.8666666666666667,
+      "confidence": 0.6072333333333333,
+      "chunks": 4.333333333333333
+    },
+    "partial": {
+      "n": 3,
+      "recall": 0.0,
+      "precision": 0.0,
+      "confidence": 0.0,
+      "chunks": 0
+    },
+    "offtopic": {
+      "n": 3,
+      "recall": 1.0,
+      "precision": 1.0,
+      "confidence": 0.0,
+      "chunks": 0
+    },
+    "latency_ms": {
+      "mean": 1785.692857142857,
+      "median": 1343.8,
+      "p95": 3648.4,
+      "max": 6163.7
+    },
+    "confidence_separation": 0.6216117647058824,
+    "stability": {
+      "mean_overlap": 0.291,
+      "worst_pair": 0.0,
+      "top1_agreement": 0.0,
+      "groups": {
+        "password_reset": {
+          "n_queries": 6,
+          "mean_overlap": 0.2222222222222222,
+          "min_overlap": 0.0,
+          "top1_agreement": false,
+          "top1_articles": {
+            "Forgot my password": "9",
+            "Reset portal password": "9",
+            "Can't access my account": null,
+            "Portal login problem": "9",
+            "Unable to sign in": "10",
+            "How do I reset my student portal password?": "9"
+          },
+          "conf_spread": 0.7694812715053558
+        },
+        "moodle_lms": {
+          "n_queries": 6,
+          "mean_overlap": 0.15777777777777777,
+          "min_overlap": 0.0,
+          "top1_agreement": false,
+          "top1_articles": {
+            "moddle": null,
+            "moodle": null,
+            "lms": "5",
+            "learning portal": "12",
+            "course portal": "12",
+            "How do I log into Moodle?": "1"
+          },
+          "conf_spread": 0.7567159533500671
+        },
+        "authenticator": {
+          "n_queries": 6,
+          "mean_overlap": 0.4,
+          "min_overlap": 0.0,
+          "top1_agreement": false,
+          "top1_articles": {
+            "2FA": null,
+            "MFA": "10",
+            "Authenticator": "11",
+            "Microsoft Authenticator": "11",
+            "Verification app": "10",
+            "How do I set up Microsoft Authenticator?": "11"
+          },
+          "conf_spread": 0.6774962345759074
+        },
+        "proctoring": {
+          "n_queries": 5,
+          "mean_overlap": 0.525,
+          "min_overlap": 0.0,
+          "top1_agreement": false,
+          "top1_articles": {
+            "SMOWL": "14",
+            "exam proctoring": "18",
+            "online exam monitoring": "15",
+            "webcam exam supervision": "14",
+            "screen monitoring during exams": "15"
+          },
+          "conf_spread": 0.15127191841602328
+        },
+        "email": {
+          "n_queries": 5,
+          "mean_overlap": 0.15,
+          "min_overlap": 0.0,
+          "top1_agreement": false,
+          "top1_articles": {
+            "student email": "4",
+            "Outlook access": "5",
+            "Microsoft 365 email": "10",
+            "university email login": "4",
+            "corporate email access": "4"
+          },
+          "conf_spread": 0.12146073579788208
+        }
+      }
+    }
+  },
+  "rows": [
+    {
+      "query": "How do I reset my student portal password?",
+      "kind": "covered",
+      "expected": [
+        "9",
+        "12",
+        "3"
+      ],
+      "got": [
+        "9",
+        "9",
+        "4",
+        "4",
+        "3"
+      ],
+      "n_chunks": 5,
+      "n_images": 3,
+      "recall": 1.0,
+      "precision": 0.6,
+      "confidence": 0.6472,
+      "ms": 1934.3
+    },
+    {
+      "query": "I forgot my portal password",
+      "kind": "covered",
+      "expected": [
+        "9",
+        "12",
+        "3"
+      ],
+      "got": [
+        "9",
+        "9"
+      ],
+      "n_chunks": 2,
+      "n_images": 3,
+      "recall": 1.0,
+      "precision": 1.0,
+      "confidence": 0.5954,
+      "ms": 993.0
+    },
+    {
+      "query": "What is SMOWL proctoring?",
+      "kind": "covered",
+      "expected": [
+        "14",
+        "15",
+        "18",
+        "21"
+      ],
+      "got": [
+        "18",
+        "21",
+        "19"
+      ],
+      "n_chunks": 3,
+      "n_images": 3,
+      "recall": 1.0,
+      "precision": 0.6666666666666666,
+      "confidence": 0.6034,
+      "ms": 863.6
+    },
+    {
+      "query": "How do I set up Microsoft Authenticator?",
+      "kind": "covered",
+      "expected": [
+        "11",
+        "10"
+      ],
+      "got": [
+        "11",
+        "11",
+        "10",
+        "10",
+        "10",
+        "10"
+      ],
+      "n_chunks": 6,
+      "n_images": 3,
+      "recall": 1.0,
+      "precision": 1.0,
+      "confidence": 0.6775,
+      "ms": 1256.3
+    },
+    {
+      "query": "multi-factor authentication setup for Microsoft 365",
+      "kind": "covered",
+      "expected": [
+        "10",
+        "11"
+      ],
+      "got": [
+        "10",
+        "10",
+        "10"
+      ],
+      "n_chunks": 3,
+      "n_images": 3,
+      "recall": 1.0,
+      "precision": 1.0,
+      "confidence": 0.8116,
+      "ms": 922.7
+    },
+    {
+      "query": "How do I log in to the LMS?",
+      "kind": "covered",
+      "expected": [
+        "1"
+      ],
+      "got": [
+        "1",
+        "1",
+        "4",
+        "4",
+        "5"
+      ],
+      "n_chunks": 5,
+      "n_images": 3,
+      "recall": 1.0,
+      "precision": 0.4,
+      "confidence": 0.6519,
+      "ms": 1256.1
+    },
+    {
+      "query": "How do I register for supplementary exams?",
+      "kind": "covered",
+      "expected": [
+        "13"
+      ],
+      "got": [
+        "13",
+        "14",
+        "14",
+        "14",
+        "14",
+        "15"
+      ],
+      "n_chunks": 6,
+      "n_images": 3,
+      "recall": 1.0,
+      "precision": 0.16666666666666666,
+      "confidence": 0.4714,
+      "ms": 1445.3
+    },
+    {
+      "query": "How do I access my student email?",
+      "kind": "covered",
+      "expected": [
+        "4"
+      ],
+      "got": [
+        "4",
+        "4",
+        "9",
+        "9",
+        "1"
+      ],
+      "n_chunks": 5,
+      "n_images": 3,
+      "recall": 1.0,
+      "precision": 0.4,
+      "confidence": 0.603,
+      "ms": 1500.2
+    },
+    {
+      "query": "How do I use Microsoft Teams?",
+      "kind": "covered",
+      "expected": [
+        "5"
+      ],
+      "got": [
+        "5",
+        "5",
+        "10",
+        "10",
+        "10",
+        "10",
+        "11"
+      ],
+      "n_chunks": 7,
+      "n_images": 3,
+      "recall": 1.0,
+      "precision": 0.2857142857142857,
+      "confidence": 0.4407,
+      "ms": 1519.4
+    },
+    {
+      "query": "What is My Loft?",
+      "kind": "covered",
+      "expected": [
+        "6"
+      ],
+      "got": [
+        "6"
+      ],
+      "n_chunks": 1,
+      "n_images": 3,
+      "recall": 1.0,
+      "precision": 1.0,
+      "confidence": 0.4398,
+      "ms": 1355.1
+    },
+    {
+      "query": "How do I contact the AmIU help desk?",
+      "kind": "covered",
+      "expected": [
+        "2"
+      ],
+      "got": [
+        "2",
+        "2",
+        "2"
+      ],
+      "n_chunks": 3,
+      "n_images": 3,
+      "recall": 1.0,
+      "precision": 1.0,
+      "confidence": 0.7981,
+      "ms": 835.2
+    },
+    {
+      "query": "How do lecturers mark exams?",
+      "kind": "covered",
+      "expected": [
+        "20"
+      ],
+      "got": [
+        "20",
+        "19",
+        "18"
+      ],
+      "n_chunks": 3,
+      "n_images": 3,
+      "recall": 1.0,
+      "precision": 0.3333333333333333,
+      "confidence": 0.5974,
+      "ms": 1192.1
+    },
+    {
+      "query": "student portal user guide",
+      "kind": "covered",
+      "expected": [
+        "12",
+        "3"
+      ],
+      "got": [
+        "12",
+        "3",
+        "9",
+        "9"
+      ],
+      "n_chunks": 4,
+      "n_images": 3,
+      "recall": 1.0,
+      "precision": 0.5,
+      "confidence": 0.6608,
+      "ms": 1965.3
+    },
+    {
+      "query": "What happens during a proctored exam?",
+      "kind": "covered",
+      "expected": [
+        "21",
+        "15",
+        "14"
+      ],
+      "got": [
+        "21",
+        "19",
+        "15"
+      ],
+      "n_chunks": 3,
+      "n_images": 3,
+      "recall": 1.0,
+      "precision": 0.6666666666666666,
+      "confidence": 0.5834,
+      "ms": 2989.1
+    },
+    {
+      "query": "VAS training presentation slides",
+      "kind": "covered",
+      "expected": [
+        "22"
+      ],
+      "got": [
+        "22",
+        "17",
+        "16"
+      ],
+      "n_chunks": 3,
+      "n_images": 3,
+      "recall": 1.0,
+      "precision": 0.3333333333333333,
+      "confidence": 0.652,
+      "ms": 3737.4
+    },
+    {
+      "query": "How do I take an exam with screen monitoring?",
+      "kind": "covered",
+      "expected": [
+        "15",
+        "14",
+        "21"
+      ],
+      "got": [
+        "15",
+        "15",
+        "15",
+        "15",
+        "14"
+      ],
+      "n_chunks": 5,
+      "n_images": 3,
+      "recall": 1.0,
+      "precision": 1.0,
+      "confidence": 0.6345,
+      "ms": 2145.9
+    },
+    {
+      "query": "register and take exams with proctoring software",
+      "kind": "covered",
+      "expected": [
+        "14",
+        "15"
+      ],
+      "got": [
+        "14",
+        "14",
+        "14"
+      ],
+      "n_chunks": 3,
+      "n_images": 3,
+      "recall": 1.0,
+      "precision": 1.0,
+      "confidence": 0.6993,
+      "ms": 2506.7
+    },
+    {
+      "query": "How do I log into Moodle?",
+      "kind": "synonym",
+      "expected": [
+        "1"
+      ],
+      "got": [
+        "1"
+      ],
+      "n_chunks": 1,
+      "n_images": 3,
+      "recall": 1.0,
+      "precision": 1.0,
+      "confidence": 0.7567,
+      "ms": 1076.2
+    },
+    {
+      "query": "Learning Management System sign in",
+      "kind": "synonym",
+      "expected": [
+        "1"
+      ],
+      "got": [],
+      "n_chunks": 0,
+      "n_images": 3,
+      "recall": 0.0,
+      "precision": 0.0,
+      "confidence": 0.0,
+      "ms": 1100.9
+    },
+    {
+      "query": "2FA setup",
+      "kind": "synonym",
+      "expected": [
+        "10",
+        "11"
+      ],
+      "got": [],
+      "n_chunks": 0,
+      "n_images": 3,
+      "recall": 0.0,
+      "precision": 0.0,
+      "confidence": 0.0,
+      "ms": 1466.4
+    },
+    {
+      "query": "two-factor authentication for Office 365",
+      "kind": "synonym",
+      "expected": [
+        "10",
+        "11"
+      ],
+      "got": [
+        "10",
+        "10",
+        "10"
+      ],
+      "n_chunks": 3,
+      "n_images": 3,
+      "recall": 1.0,
+      "precision": 1.0,
+      "confidence": 0.7281,
+      "ms": 1168.1
+    },
+    {
+      "query": "verification app enrollment",
+      "kind": "synonym",
+      "expected": [
+        "11",
+        "10"
+      ],
+      "got": [
+        "10",
+        "10",
+        "4"
+      ],
+      "n_chunks": 3,
+      "n_images": 3,
+      "recall": 1.0,
+      "precision": 0.6666666666666666,
+      "confidence": 0.4992,
+      "ms": 2704.9
+    },
+    {
+      "query": "SIS password reset",
+      "kind": "synonym",
+      "expected": [
+        "9",
+        "12",
+        "3"
+      ],
+      "got": [
+        "9",
+        "9"
+      ],
+      "n_chunks": 2,
+      "n_images": 3,
+      "recall": 1.0,
+      "precision": 1.0,
+      "confidence": 0.7662,
+      "ms": 1809.7
+    },
+    {
+      "query": "online exam monitoring software",
+      "kind": "synonym",
+      "expected": [
+        "14",
+        "15",
+        "18",
+        "21"
+      ],
+      "got": [
+        "14",
+        "14",
+        "15",
+        "15",
+        "15"
+      ],
+      "n_chunks": 5,
+      "n_images": 3,
+      "recall": 1.0,
+      "precision": 1.0,
+      "confidence": 0.523,
+      "ms": 1298.5
+    },
+    {
+      "query": "webcam exam supervision",
+      "kind": "synonym",
+      "expected": [
+        "15",
+        "14",
+        "21"
+      ],
+      "got": [
+        "14",
+        "14",
+        "15"
+      ],
+      "n_chunks": 3,
+      "n_images": 3,
+      "recall": 1.0,
+      "precision": 1.0,
+      "confidence": 0.5824,
+      "ms": 1265.3
+    },
+    {
+      "query": "Virtual Assessment System exam",
+      "kind": "synonym",
+      "expected": [
+        "14",
+        "15",
+        "22",
+        "17"
+      ],
+      "got": [
+        "14",
+        "15",
+        "15",
+        "15",
+        "16"
+      ],
+      "n_chunks": 5,
+      "n_images": 3,
+      "recall": 1.0,
+      "precision": 0.8,
+      "confidence": 0.6916,
+      "ms": 2937.9
+    },
+    {
+      "query": "corporate email access",
+      "kind": "synonym",
+      "expected": [
+        "4"
+      ],
+      "got": [
+        "4",
+        "4",
+        "5"
+      ],
+      "n_chunks": 3,
+      "n_images": 3,
+      "recall": 1.0,
+      "precision": 0.6666666666666666,
+      "confidence": 0.5972,
+      "ms": 2575.3
+    },
+    {
+      "query": "Microsoft 365 email login",
+      "kind": "synonym",
+      "expected": [
+        "4"
+      ],
+      "got": [
+        "10",
+        "10",
+        "10",
+        "10"
+      ],
+      "n_chunks": 4,
+      "n_images": 3,
+      "recall": 0.0,
+      "precision": 0.0,
+      "confidence": 0.6049,
+      "ms": 1054.8
+    },
+    {
+      "query": "e-learning platform login",
+      "kind": "synonym",
+      "expected": [
+        "1"
+      ],
+      "got": [
+        "1"
+      ],
+      "n_chunks": 1,
+      "n_images": 3,
+      "recall": 1.0,
+      "precision": 1.0,
+      "confidence": 0.5539,
+      "ms": 2954.9
+    },
+    {
+      "query": "moddle login",
+      "kind": "typo",
+      "expected": [
+        "1"
+      ],
+      "got": [],
+      "n_chunks": 0,
+      "n_images": 3,
+      "recall": 0.0,
+      "precision": 0.0,
+      "confidence": 0.0,
+      "ms": 705.8
+    },
+    {
+      "query": "athenticator app setup",
+      "kind": "typo",
+      "expected": [
+        "11",
+        "10"
+      ],
+      "got": [
+        "11",
+        "11",
+        "10",
+        "10",
+        "10"
+      ],
+      "n_chunks": 5,
+      "n_images": 3,
+      "recall": 1.0,
+      "precision": 1.0,
+      "confidence": 0.5648,
+      "ms": 733.5
+    },
+    {
+      "query": "smwol camera not working",
+      "kind": "typo",
+      "expected": [
+        "15",
+        "21",
+        "14",
+        "16"
+      ],
+      "got": [
+        "14",
+        "14",
+        "14",
+        "15",
+        "15",
+        "15",
+        "15"
+      ],
+      "n_chunks": 7,
+      "n_images": 3,
+      "recall": 1.0,
+      "precision": 1.0,
+      "confidence": 0.4781,
+      "ms": 6163.7
+    },
+    {
+      "query": "reset my studnet portal pasword",
+      "kind": "typo",
+      "expected": [
+        "9",
+        "12",
+        "3"
+      ],
+      "got": [
+        "9",
+        "9",
+        "3",
+        "4",
+        "4"
+      ],
+      "n_chunks": 5,
+      "n_images": 3,
+      "recall": 1.0,
+      "precision": 0.6,
+      "confidence": 0.6328,
+      "ms": 1067.9
+    },
+    {
+      "query": "microsft teams",
+      "kind": "typo",
+      "expected": [
+        "5"
+      ],
+      "got": [
+        "5",
+        "5"
+      ],
+      "n_chunks": 2,
+      "n_images": 3,
+      "recall": 1.0,
+      "precision": 1.0,
+      "confidence": 0.7409,
+      "ms": 863.3
+    },
+    {
+      "query": "suplementary exam registration",
+      "kind": "typo",
+      "expected": [
+        "13"
+      ],
+      "got": [
+        "13",
+        "14",
+        "14",
+        "14",
+        "14"
+      ],
+      "n_chunks": 5,
+      "n_images": 3,
+      "recall": 1.0,
+      "precision": 0.2,
+      "confidence": 0.5427,
+      "ms": 988.8
+    },
+    {
+      "query": "helpdesk contac",
+      "kind": "typo",
+      "expected": [
+        "2"
+      ],
+      "got": [
+        "2"
+      ],
+      "n_chunks": 1,
+      "n_images": 3,
+      "recall": 1.0,
+      "precision": 1.0,
+      "confidence": 0.4626,
+      "ms": 1115.6
+    },
+    {
+      "query": "stdent email acess",
+      "kind": "typo",
+      "expected": [
+        "4"
+      ],
+      "got": [
+        "4",
+        "4",
+        "9",
+        "9",
+        "3"
+      ],
+      "n_chunks": 5,
+      "n_images": 3,
+      "recall": 1.0,
+      "precision": 0.4,
+      "confidence": 0.6093,
+      "ms": 1095.2
+    },
+    {
+      "query": "I'm trying to log into the learning platform but can't remember my password",
+      "kind": "conversational",
+      "expected": [
+        "1",
+        "9",
+        "12",
+        "3"
+      ],
+      "got": [
+        "9",
+        "9",
+        "1"
+      ],
+      "n_chunks": 3,
+      "n_images": 3,
+      "recall": 1.0,
+      "precision": 1.0,
+      "confidence": 0.5951,
+      "ms": 2235.5
+    },
+    {
+      "query": "can't seem to get the authenticator working on my phone",
+      "kind": "conversational",
+      "expected": [
+        "11",
+        "10"
+      ],
+      "got": [
+        "11",
+        "11",
+        "10",
+        "10",
+        "10"
+      ],
+      "n_chunks": 5,
+      "n_images": 3,
+      "recall": 1.0,
+      "precision": 1.0,
+      "confidence": 0.5932,
+      "ms": 2087.0
+    },
+    {
+      "query": "my webcam isn't being detected during the online exam",
+      "kind": "conversational",
+      "expected": [
+        "15",
+        "21",
+        "14",
+        "16"
+      ],
+      "got": [
+        "15",
+        "15",
+        "15",
+        "14",
+        "14"
+      ],
+      "n_chunks": 5,
+      "n_images": 3,
+      "recall": 1.0,
+      "precision": 1.0,
+      "confidence": 0.456,
+      "ms": 1129.7
+    },
+    {
+      "query": "I need to reach someone at the help desk about an issue",
+      "kind": "conversational",
+      "expected": [
+        "2"
+      ],
+      "got": [
+        "2",
+        "2",
+        "2"
+      ],
+      "n_chunks": 3,
+      "n_images": 3,
+      "recall": 1.0,
+      "precision": 1.0,
+      "confidence": 0.5653,
+      "ms": 981.2
+    },
+    {
+      "query": "trying to check my university email but it won't let me in",
+      "kind": "conversational",
+      "expected": [
+        "4"
+      ],
+      "got": [
+        "4",
+        "4",
+        "9",
+        "9",
+        "2"
+      ],
+      "n_chunks": 5,
+      "n_images": 3,
+      "recall": 1.0,
+      "precision": 0.4,
+      "confidence": 0.5741,
+      "ms": 3003.3
+    },
+    {
+      "query": "password",
+      "kind": "short",
+      "expected": [
+        "9",
+        "12",
+        "3"
+      ],
+      "got": [
+        "9",
+        "9",
+        "4",
+        "4",
+        "11"
+      ],
+      "n_chunks": 5,
+      "n_images": 3,
+      "recall": 1.0,
+      "precision": 0.4,
+      "confidence": 0.4744,
+      "ms": 1176.4
+    },
+    {
+      "query": "authenticator",
+      "kind": "short",
+      "expected": [
+        "11",
+        "10"
+      ],
+      "got": [
+        "11",
+        "11",
+        "10",
+        "10",
+        "10"
+      ],
+      "n_chunks": 5,
+      "n_images": 3,
+      "recall": 1.0,
+      "precision": 1.0,
+      "confidence": 0.5843,
+      "ms": 780.5
+    },
+    {
+      "query": "proctoring",
+      "kind": "short",
+      "expected": [
+        "14",
+        "15",
+        "18",
+        "21"
+      ],
+      "got": [
+        "18",
+        "19",
+        "21"
+      ],
+      "n_chunks": 3,
+      "n_images": 3,
+      "recall": 1.0,
+      "precision": 0.6666666666666666,
+      "confidence": 0.6034,
+      "ms": 969.8
+    },
+    {
+      "query": "email login",
+      "kind": "short",
+      "expected": [
+        "4"
+      ],
+      "got": [
+        "4",
+        "4",
+        "1",
+        "1",
+        "9"
+      ],
+      "n_chunks": 5,
+      "n_images": 3,
+      "recall": 1.0,
+      "precision": 0.4,
+      "confidence": 0.5678,
+      "ms": 1334.6
+    },
+    {
+      "query": "exam registration",
+      "kind": "short",
+      "expected": [
+        "13"
+      ],
+      "got": [
+        "14",
+        "14",
+        "14",
+        "14",
+        "15",
+        "13"
+      ],
+      "n_chunks": 6,
+      "n_images": 3,
+      "recall": 1.0,
+      "precision": 0.16666666666666666,
+      "confidence": 0.5295,
+      "ms": 763.3
+    },
+    {
+      "query": "I am a second year student and I have been trying to reset my student portal password for the past two days because I cannot remember it and need to access my course materials urgently before the assignment deadline",
+      "kind": "long",
+      "expected": [
+        "9",
+        "12",
+        "3"
+      ],
+      "got": [
+        "9",
+        "9",
+        "4",
+        "4",
+        "3"
+      ],
+      "n_chunks": 5,
+      "n_images": 3,
+      "recall": 1.0,
+      "precision": 0.6,
+      "confidence": 0.5876,
+      "ms": 3613.9
+    },
+    {
+      "query": "My lecturer told us we need to set up Microsoft Authenticator for accessing email and Office 365 but I have never used it before and am not sure where to start or what app to download",
+      "kind": "long",
+      "expected": [
+        "11",
+        "10"
+      ],
+      "got": [
+        "11",
+        "10",
+        "10"
+      ],
+      "n_chunks": 3,
+      "n_images": 3,
+      "recall": 1.0,
+      "precision": 1.0,
+      "confidence": 0.7071,
+      "ms": 3551.9
+    },
+    {
+      "query": "During my last proctored exam the system kept saying my camera was not working properly and I had to restart multiple times which caused me to lose a lot of time on the test",
+      "kind": "long",
+      "expected": [
+        "15",
+        "21",
+        "14",
+        "16"
+      ],
+      "got": [
+        "14",
+        "14",
+        "14",
+        "16",
+        "21"
+      ],
+      "n_chunks": 5,
+      "n_images": 3,
+      "recall": 1.0,
+      "precision": 1.0,
+      "confidence": 0.527,
+      "ms": 3648.4
+    },
+    {
+      "query": "I cannot access my assignments",
+      "kind": "partial",
+      "expected": [
+        "1"
+      ],
+      "got": [],
+      "n_chunks": 0,
+      "n_images": 3,
+      "recall": 0.0,
+      "precision": 0.0,
+      "confidence": 0.0,
+      "ms": 1353.0
+    },
+    {
+      "query": "moddle assignments",
+      "kind": "partial",
+      "expected": [
+        "1"
+      ],
+      "got": [],
+      "n_chunks": 0,
+      "n_images": 0,
+      "recall": 0.0,
+      "precision": 0.0,
+      "confidence": 0.0,
+      "ms": 801.1
+    },
+    {
+      "query": "Where do I check my grades?",
+      "kind": "partial",
+      "expected": [
+        "1",
+        "3",
+        "12"
+      ],
+      "got": [],
+      "n_chunks": 0,
+      "n_images": 3,
+      "recall": 0.0,
+      "precision": 0.0,
+      "confidence": 0.0,
+      "ms": 1646.3
+    },
+    {
+      "query": "What is the capital of France?",
+      "kind": "offtopic",
+      "expected": [],
+      "got": [],
+      "n_chunks": 0,
+      "n_images": 0,
+      "recall": 1.0,
+      "precision": 1.0,
+      "confidence": 0.0,
+      "ms": 2892.0
+    },
+    {
+      "query": "How do I bake a chocolate cake?",
+      "kind": "offtopic",
+      "expected": [],
+      "got": [],
+      "n_chunks": 0,
+      "n_images": 0,
+      "recall": 1.0,
+      "precision": 1.0,
+      "confidence": 0.0,
+      "ms": 2853.6
+    },
+    {
+      "query": "Who won the 2022 World Cup?",
+      "kind": "offtopic",
+      "expected": [],
+      "got": [],
+      "n_chunks": 0,
+      "n_images": 0,
+      "recall": 1.0,
+      "precision": 1.0,
+      "confidence": 0.0,
+      "ms": 2612.9
+    }
+  ],
+  "stability_detail": {
+    "password_reset": {
+      "n_queries": 6,
+      "mean_overlap": 0.2222222222222222,
+      "min_overlap": 0.0,
+      "top1_agreement": false,
+      "top1_articles": {
+        "Forgot my password": "9",
+        "Reset portal password": "9",
+        "Can't access my account": null,
+        "Portal login problem": "9",
+        "Unable to sign in": "10",
+        "How do I reset my student portal password?": "9"
+      },
+      "conf_spread": 0.7694812715053558,
+      "per_query": {
+        "Forgot my password": [
+          "9"
+        ],
+        "Reset portal password": [
+          "9"
+        ],
+        "Can't access my account": [],
+        "Portal login problem": [
+          "9",
+          "3"
+        ],
+        "Unable to sign in": [
+          "10"
+        ],
+        "How do I reset my student portal password?": [
+          "9",
+          "4",
+          "3"
+        ]
+      }
+    },
+    "moodle_lms": {
+      "n_queries": 6,
+      "mean_overlap": 0.15777777777777777,
+      "min_overlap": 0.0,
+      "top1_agreement": false,
+      "top1_articles": {
+        "moddle": null,
+        "moodle": null,
+        "lms": "5",
+        "learning portal": "12",
+        "course portal": "12",
+        "How do I log into Moodle?": "1"
+      },
+      "conf_spread": 0.7567159533500671,
+      "per_query": {
+        "moddle": [],
+        "moodle": [],
+        "lms": [
+          "5",
+          "4",
+          "1"
+        ],
+        "learning portal": [
+          "12",
+          "3",
+          "9"
+        ],
+        "course portal": [
+          "12",
+          "3",
+          "1"
+        ],
+        "How do I log into Moodle?": [
+          "1"
+        ]
+      }
+    },
+    "authenticator": {
+      "n_queries": 6,
+      "mean_overlap": 0.4,
+      "min_overlap": 0.0,
+      "top1_agreement": false,
+      "top1_articles": {
+        "2FA": null,
+        "MFA": "10",
+        "Authenticator": "11",
+        "Microsoft Authenticator": "11",
+        "Verification app": "10",
+        "How do I set up Microsoft Authenticator?": "11"
+      },
+      "conf_spread": 0.6774962345759074,
+      "per_query": {
+        "2FA": [],
+        "MFA": [
+          "10"
+        ],
+        "Authenticator": [
+          "11",
+          "10"
+        ],
+        "Microsoft Authenticator": [
+          "11",
+          "10"
+        ],
+        "Verification app": [
+          "10",
+          "4"
+        ],
+        "How do I set up Microsoft Authenticator?": [
+          "11",
+          "10"
+        ]
+      }
+    },
+    "proctoring": {
+      "n_queries": 5,
+      "mean_overlap": 0.525,
+      "min_overlap": 0.0,
+      "top1_agreement": false,
+      "top1_articles": {
+        "SMOWL": "14",
+        "exam proctoring": "18",
+        "online exam monitoring": "15",
+        "webcam exam supervision": "14",
+        "screen monitoring during exams": "15"
+      },
+      "conf_spread": 0.15127191841602328,
+      "per_query": {
+        "SMOWL": [
+          "14",
+          "15"
+        ],
+        "exam proctoring": [
+          "18",
+          "19",
+          "14"
+        ],
+        "online exam monitoring": [
+          "15",
+          "14"
+        ],
+        "webcam exam supervision": [
+          "14",
+          "15"
+        ],
+        "screen monitoring during exams": [
+          "15"
+        ]
+      }
+    },
+    "email": {
+      "n_queries": 5,
+      "mean_overlap": 0.15,
+      "min_overlap": 0.0,
+      "top1_agreement": false,
+      "top1_articles": {
+        "student email": "4",
+        "Outlook access": "5",
+        "Microsoft 365 email": "10",
+        "university email login": "4",
+        "corporate email access": "4"
+      },
+      "conf_spread": 0.12146073579788208,
+      "per_query": {
+        "student email": [
+          "4",
+          "9",
+          "3"
+        ],
+        "Outlook access": [
+          "5"
+        ],
+        "Microsoft 365 email": [
+          "10"
+        ],
+        "university email login": [
+          "4",
+          "9",
+          "1"
+        ],
+        "corporate email access": [
+          "4",
+          "5"
+        ]
+      }
+    }
+  }
+}

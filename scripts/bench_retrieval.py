@@ -34,7 +34,7 @@ async def main() -> None:
         for query in QUERIES:
             start = time.perf_counter()
             async with async_session_factory() as qdb:
-                chunks, images = await retriever.retrieve(query, db=qdb)
+                chunks, images, _processed = await retriever.retrieve(query, db=qdb)
             elapsed = (time.perf_counter() - start) * 1000
             print(f"Q: {query!r}  [{elapsed:.0f}ms]  chunks={len(chunks)} images={len(images)}")
             if not chunks:

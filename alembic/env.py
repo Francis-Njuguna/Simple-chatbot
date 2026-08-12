@@ -25,7 +25,15 @@ from backend.app.database.models import Base  # noqa: E402
 
 config = context.config
 
-if config.config_file_name is not None:
+# ``fileConfig`` defaults to ``disable_existing_loggers=True`` and replaces the
+# root handler set. Run standalone that is what you want; run *inside the app*
+# (lifespan → init_db → command.upgrade) it silently tears down the handlers
+# ``setup_logging()`` just installed and disables every logger that already
+# exists — including ``uvicorn.error``. The symptom is brutal to diagnose: the
+# app logs normally until the first migration, then goes permanently silent, so
+# unhandled 500s vanish from app.log AND the console. ``_alembic_config()`` in
+# database/session.py sets this flag to keep migrations from touching logging.
+if config.config_file_name is not None and config.attributes.get("configure_logging", True):
     fileConfig(config.config_file_name)
 
 # Autogenerate compares against the ORM metadata.
