@@ -334,17 +334,54 @@ class Settings(BaseSettings):
     # latency (the shortlist gates that).
     retrieval_candidate_pool: int = Field(default=40, alias="RETRIEVAL_CANDIDATE_POOL")
     # How many fused candidates go to the (more expensive) cross-encoder.
-    # 16 (was 12): a wider pool is pointless if the shortlist re-narrows it
-    # before the cross-encoder — which is the only stage that can tell a
-    # genuine answer from a vocabulary match — but this is the stage that costs
-    # real milliseconds, so it grows more conservatively than the pool.
+    # This is the stage that costs real milliseconds: pairs scored is
+    # rerank_shortlist x rerank_query_forms, and a pair is 123-166ms on a 4-core
+    # CPU box, so this number multiplied by the form count IS retrieval latency.
+    #
+    # 8 (was 16, was 12). The widening to 16 was reasoned from "a wider pool is
+    # pointless if the shortlist re-narrows it", but the 56-query eval set does
+    # not support paying for it: at 8 the recalls are covered 1.000, synonym
+    # 1.000, typo 1.000, partial 0.667 with off-topic precision 1.000 — every
+    # figure identical to the 16 baseline (bench_q_shortlist8.json vs
+    # bench_quality_baseline.json) for half the cross-encoder work.
+    #
+    # If you need to recover recall, spend it here rather than on
+    # rerank_query_forms, which measurably cannot be cut (see that setting).
     #
     # Named MMR_SHORTLIST historically, when MMR chose these. It is now a plain
     # top-N cut of the fused RRF ranking; the env alias is kept so existing
     # deployments do not silently fall back to the default.
     rerank_shortlist: int = Field(
-        default=16, validation_alias=AliasChoices("RERANK_SHORTLIST", "MMR_SHORTLIST")
+        default=8, validation_alias=AliasChoices("RERANK_SHORTLIST", "MMR_SHORTLIST")
     )
+
+    # ------------------------------------------------------------------
+    # torch CPU threads
+    #
+    # Process-wide, applied once at startup (see main.py lifespan). It governs
+    # every torch op in the process — the embedder and the cross-encoder both.
+    #
+    # This knob is a genuine trade-off, not a free win, and the right value
+    # depends on which one you are optimising:
+    #
+    #   LATENCY (one request at a time). More threads is better. Measured on a
+    #   4-core box, 32 pairs of ms-marco-MiniLM-L-6-v2:
+    #       1 thread          5312ms   (166.0ms/pair)
+    #       2 threads (torch default on 4 cores)
+    #                         4987ms   (155.8ms/pair)
+    #       4 threads         3933ms   (122.9ms/pair)   <- 1.27x over default
+    #
+    #   THROUGHPUT (many concurrent requests). Fewer threads is better. With N
+    #   requests each spawning 4 threads on 4 cores the process oversubscribes
+    #   and every request slows down; OPTIMIZATION_REPORT.md recommends 1 thread
+    #   for exactly this reason and measures it as the top fix at 50 users.
+    #
+    # You cannot have both on a fixed core count. The default here is 4 because
+    # the current goal is first-token latency for a small student cohort. Set
+    # TORCH_NUM_THREADS=1 if the deployment becomes concurrency-bound.
+    # 0 means "leave torch alone" (use its own default).
+    # ------------------------------------------------------------------
+    torch_num_threads: int = Field(default=4, ge=0, alias="TORCH_NUM_THREADS")
 
     # ------------------------------------------------------------------
     # Cross-encoder reranking

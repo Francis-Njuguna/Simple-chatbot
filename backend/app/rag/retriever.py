@@ -586,8 +586,16 @@ class HybridRetriever:
         # tomorrow?" and "Explain quantum entanglement" cleared the gate at
         # -7.0/-7.1. Each extra phrasing is another lottery ticket against a
         # fixed threshold, so the count is a recall/precision dial and 2 is
-        # where it is measurably best. It is also cheap: reranking is ~0.4s for
-        # 16 passages, so the second pass keeps the query near 1s.
+        # where it is measurably best.
+        #
+        # What it costs: every form multiplies the pairs scored, and on a 4-core
+        # CPU box a pair is 123-166ms, so shortlist x forms IS the retrieval
+        # latency — the "~0.4s for 16 passages" this comment used to claim was
+        # off by ~20x on that hardware. The two factors are not interchangeable:
+        # shortlist 16->8 measured quality-identical, while forms 2->1 cost
+        # synonym recall 1.000->0.750 and partial 0.667->0.000. Shrink the
+        # shortlist, never the forms. Both forms are scored in ONE batched
+        # predict() call — see CrossEncoderReranker.score_multi.
         reranker = get_reranker()
         rerank_texts = [pool_by_id[cid]["text"] for cid in selected_ids]
         # The NORMALISED query, not the raw original: typo correction is exactly
@@ -623,19 +631,9 @@ class HybridRetriever:
 
         start = time.perf_counter()
 
-        def _score_all() -> Optional[list[float]]:
-            best: Optional[list[float]] = None
-            for form in rerank_forms:
-                scores = reranker.score(form, rerank_texts)
-                if scores is None:
-                    return None
-                if best is None:
-                    best = [float(s) for s in scores]
-                else:
-                    best = [max(b, float(s)) for b, s in zip(best, scores)]
-            return best
-
-        rerank_scores = await anyio.to_thread.run_sync(_score_all)
+        rerank_scores = await anyio.to_thread.run_sync(
+            lambda: reranker.score_multi(rerank_forms, rerank_texts)
+        )
         timings["rerank_ms"] = (time.perf_counter() - start) * 1000
 
         # --- Intent boost ------------------------------------------------
