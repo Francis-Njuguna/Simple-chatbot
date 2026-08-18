@@ -10,6 +10,7 @@ Performance notes
 """
 
 
+import asyncio
 import time
 from functools import lru_cache
 from typing import Any
@@ -78,18 +79,44 @@ class LLMService:
             # AgentRouter emits `data: null` SSE frames that crash the langchain
             # streaming adapter. See rag.sse_repair for the frame dump and why
             # the repair belongs at the transport layer.
+            import httpx  # lazy: only this provider builds its own client
+
             from backend.app.rag.sse_repair import build_repaired_async_client
 
+            # Granular, not scalar — see settings.llm_connect_timeout for why
+            # connect and read need different budgets.
+            #
+            # This object MUST also be handed to ChatOpenAI below. langchain
+            # passes `request_timeout` straight through to AsyncOpenAI, and the
+            # SDK only falls back to the http client's own timeout when it was
+            # given none at all (`if not is_given(timeout)`,
+            # openai/_base_client.py:1491). So passing a bare int there would
+            # silently discard this split and restore one flat budget.
+            timeout = httpx.Timeout(
+                connect=self.settings.llm_connect_timeout,
+                read=float(self.settings.llm_timeout),
+                write=float(self.settings.llm_timeout),
+                pool=self.settings.llm_connect_timeout,
+            )
+
             kwargs["http_async_client"] = build_repaired_async_client(
-                timeout=self.settings.llm_timeout,
+                timeout=timeout,
                 max_connections=self.settings.llm_max_connections,
                 max_keepalive=self.settings.llm_max_keepalive_connections,
             )
 
             logger.info(
-                "Using AgentRouter model %s via %s",
+                "Using AgentRouter model %s via %s (connect %.0fs, read %.0fs x %d "
+                "attempts = %.0fs worst case, first-token ceiling %s)",
                 self.settings.agentrouter_model,
                 base_url,
+                self.settings.llm_connect_timeout,
+                float(self.settings.llm_timeout),
+                1 + max(0, self.settings.llm_max_retries),
+                self.settings.llm_transport_worst_case_seconds,
+                f"{self.settings.llm_first_token_timeout:.0f}s"
+                if self.settings.llm_first_token_timeout > 0
+                else "disabled",
             )
             return ChatOpenAI(
                 model=self.settings.agentrouter_model,
@@ -98,8 +125,12 @@ class LLMService:
                 # None => the parameter is not sent at all. See config.
                 temperature=self.settings.agentrouter_temperature,
                 max_tokens=max_tokens,
-                timeout=self.settings.llm_timeout,
+                timeout=timeout,
                 max_retries=self.settings.llm_max_retries,
+                # langchain_openai's own default is 120s, which would leave a
+                # half-written answer on screen for two minutes. See
+                # settings.llm_stream_stall_timeout.
+                stream_chunk_timeout=self.settings.llm_stream_stall_timeout or None,
                 **kwargs,
             )
 
@@ -306,8 +337,21 @@ class LLMService:
         """
         provider = self.settings.llm_provider
         name = type(exc).__name__
+        status = getattr(exc, "status_code", None)
 
-        if "Authentication" in name or "PermissionDenied" in name:
+        if name == "PermissionDeniedError" or status == 403:
+            # 403 is NOT a credentials problem, and saying it is sends you to
+            # rotate a key that was fine. AgentRouter returns 403
+            # "该令牌无权访问模型 <model>" ("this token is not authorised for model
+            # <model>") when the key is valid but the plan does not include that
+            # model. Measured 2026-08-18: this key answers on claude-opus-5 and
+            # returns 403 for both claude-haiku-4-5 and claude-sonnet-4-5.
+            detail = (
+                f"the {provider} plan for this key does not include the model "
+                f"{self._configured_model()} (HTTP 403). The key itself is "
+                "valid — switch the model back, or upgrade the key"
+            )
+        elif "Authentication" in name or "PermissionDenied" in name:
             detail = (
                 f"the {provider} endpoint rejected the configured credentials"
             )
@@ -464,22 +508,99 @@ class LLMService:
         history: str = "No prior conversation.",
         images: str = NO_IMAGES_NOTE,
     ):
-        """Yield answer chunks as they arrive (for streaming responses)."""
+        """Yield answer chunks as they arrive (for streaming responses).
+
+        Time-to-first-token is bounded here by
+        ``settings.llm_first_token_timeout`` rather than being left to the HTTP
+        timeout, because the two are not equivalent: the OpenAI SDK runs its
+        entire retry loop inside the first ``__anext__``, so the transport
+        budget multiplies by the attempt count (30s x 3 = the ~91s measured on
+        2026-08-12) while this deadline does not. It therefore cuts a cascade
+        short wherever it has reached.
+
+        Once real text has been yielded the deadline is dropped. An answer
+        already appearing on screen must not be truncated for being long, and
+        silence *after* the first token is a different failure — caught by
+        ``stream_chunk_timeout`` (settings.llm_stream_stall_timeout) instead.
+        """
         if self._use_chat_model():
             prompt = self._build_messages(question, context, history, images)
         else:
             prompt = self._build_prompt(question, context, history, images)
- 
+
+        budget = float(self.settings.llm_first_token_timeout or 0.0)
+        # One deadline for the whole pre-first-token phase, not a per-chunk
+        # timeout: a reasoning model streams many content-free deltas before any
+        # answer text, and re-arming the clock on each of those would let the
+        # total wait grow without limit while every individual wait looked fine.
+        deadline = (time.monotonic() + budget) if budget > 0 else None
+        yielded_any = False
+
+        iterator = self._llm.astream(prompt).__aiter__()
         try:
-            async for chunk in self._llm.astream(prompt):
+            while True:
+                try:
+                    if deadline is None:
+                        chunk = await iterator.__anext__()
+                    else:
+                        remaining = deadline - time.monotonic()
+                        if remaining <= 0:
+                            raise TimeoutError
+                        chunk = await asyncio.wait_for(
+                            iterator.__anext__(), timeout=remaining
+                        )
+                except StopAsyncIteration:
+                    break
                 # strip=False: leading/trailing spaces inside a delta are part
                 # of the answer. See _extract_text.
                 text = self._extract_text(chunk, strip=False)
                 if text:
+                    # Only real text stops the clock — see the note above on
+                    # content-free deltas.
+                    deadline = None
+                    yielded_any = True
                     yield text
+        except TimeoutError:
+            # asyncio.TimeoutError is an alias of the builtin from 3.11, and
+            # langchain's StreamChunkTimeoutError subclasses it — so this branch
+            # catches both of our deadlines and has to say which one fired.
+            if yielded_any:
+                logger.error(
+                    "LLM stream stalled mid-answer (provider=%s model=%s, "
+                    "stall budget %.0fs) — answer is incomplete",
+                    self.settings.llm_provider,
+                    self._configured_model(),
+                    self.settings.llm_stream_stall_timeout,
+                )
+                yield (
+                    "\n\n*[The answer was cut off: the model stopped sending "
+                    "text. Please ask again.]*"
+                )
+            else:
+                logger.error(
+                    "LLM sent no answer text within %.0fs (provider=%s model=%s); "
+                    "transport budget was %.0fs x %d attempts = %.0fs",
+                    budget,
+                    self.settings.llm_provider,
+                    self._configured_model(),
+                    float(self.settings.llm_timeout),
+                    1 + max(0, self.settings.llm_max_retries),
+                    self.settings.llm_transport_worst_case_seconds,
+                )
+                yield (
+                    "I found relevant knowledge-base material but the "
+                    f"{self.settings.llm_provider} endpoint did not start "
+                    f"answering within {budget:.0f} seconds, so I stopped "
+                    "waiting. This is a service problem, not a gap in the "
+                    "knowledge base — please try again."
+                )
         except Exception as exc:
             logger.exception("LLM streaming failed")
             yield self._error_message(exc)
+        finally:
+            # Release the httpx connection now rather than at GC. Matters most
+            # on the timeout path, where the request is still open.
+            await iterator.aclose()
 
 
 # ---------------------------------------------------------------------------

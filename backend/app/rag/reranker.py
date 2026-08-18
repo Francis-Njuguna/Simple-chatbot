@@ -7,12 +7,27 @@ reads the query and chunk **together** in one forward pass and scores their
 actual relevance, which reorders a shortlist far more accurately.
 
 It runs on the fused shortlist only (a handful of chunks), never the full corpus.
-Cost per pair is very much hardware-dependent: measured on a 4-core CPU box with
-no GPU it is 123-166ms per pair, not the tens of milliseconds this docstring used
-to claim, which makes RERANK_SHORTLIST x RERANK_QUERY_FORMS the dominant term in
-retrieval latency. Model load is lazy and failure is non-fatal: if the weights
-cannot be fetched the retriever keeps the cosine ordering rather than erroring
-out on every query.
+Cost per pair is hardware-dependent. Measured *warm* on a 4-core CPU box with no
+GPU, int8: 18-26ms per pair. So RERANK_SHORTLIST x RERANK_QUERY_FORMS is the
+dominant term in retrieval latency, but a modest one — the shipped 8 x 2 = 16
+pairs is ~0.4s.
+
+Two numbers to distrust if you find them quoted elsewhere in this repo:
+
+* "123-166ms per pair" was briefly written here and in config.py. It is wrong:
+  it came from cold first calls that also paid graph setup. Discard the first
+  few predict() calls before timing this model, or you will measure that again.
+* "~271ms per pair", derived from production's 8.7s for 32 pairs. Also wrong,
+  and more misleading than the first: that request was slow because the whole
+  process was starved, not because a pair costs 271ms. In the same log, a stage
+  that does nothing but concatenate strings took 1,848ms, one Postgres SELECT
+  took 14,953ms, and the same warm model embedded one short query in 95ms and in
+  4,452ms a minute apart. Rerank absorbs the blame because it is the largest
+  block of CPU work in the request, not because it is the problem. Do NOT shrink
+  the shortlist or swap in a smaller model to chase it. See RERANK_LATENCY.md.
+
+Model load is lazy and failure is non-fatal: if the weights cannot be fetched the
+retriever keeps the cosine ordering rather than erroring out on every query.
 """
 
 import threading

@@ -110,8 +110,58 @@ class Settings(BaseSettings):
     # 2048 (not 1024): the synthesis prompt asks for a complete numbered
     # procedure plus caveats, which 1024 tokens truncates mid-answer.
     llm_max_tokens: int = Field(default=2048, alias="LLM_MAX_TOKENS")
-    llm_timeout: int = Field(default=30, alias="LLM_TIMEOUT")
-    llm_max_retries: int = Field(default=2, alias="LLM_MAX_RETRIES")
+
+    # ---------------- LLM failure budget ----------------
+    # These settings MULTIPLY. Read the arithmetic before changing one, because
+    # the product — not any single value — is what a student sits through when
+    # the gateway misbehaves:
+    #
+    #     transport worst case  =  llm_timeout x (1 + llm_max_retries) + backoff
+    #
+    # The previous defaults were 30 and 2, i.e. 30 x 3 + ~1.2 = ~91s. Nobody
+    # chose 91s; it was the product of two numbers that each looked reasonable
+    # alone. Measured on 2026-08-12 (logs/app.log, requests 44dc0992d827,
+    # f46c5ed2ed9c, a1837ba48b96): every attempt to agentrouter.org burned the
+    # full 30s without a response, so all three spent 90.9-95.6s in the LLM
+    # stage and two of them then showed the student an error message.
+    #
+    # Note what is NOT the problem: the retry *sleeps*. Every logged backoff is
+    # 0.37-0.99s (`Retrying request to /chat/completions in 0.42 seconds`), so
+    # Retry-After is never sent by this gateway and honouring it would change
+    # nothing. The cost is entirely the per-attempt timeout, times the attempts.
+    #
+    # 25, not lower: the one attempt that did succeed took ~22s (09:03:15 ->
+    # 09:03:37). A timeout under ~25s converts that success into a failure.
+    llm_timeout: int = Field(default=25, alias="LLM_TIMEOUT")
+    # 1, not 2: retries genuinely rescue requests here — 44dc0992d827 succeeded
+    # on its third attempt — but each costs a whole llm_timeout, so a third
+    # attempt buys a little success rate at +25s on every failure.
+    llm_max_retries: int = Field(default=1, alias="LLM_MAX_RETRIES")
+    # Split out from llm_timeout because connecting and generating fail on
+    # wildly different timescales: TCP+TLS to a reachable host is well under a
+    # second, so an unreachable gateway should be reported in ~5s instead of
+    # spending the generation budget on it. A scalar timeout cannot say that.
+    # Only takes effect where the provider is handed an explicit httpx client
+    # (AgentRouter — see rag.sse_repair).
+    llm_connect_timeout: float = Field(default=5.0, alias="LLM_CONNECT_TIMEOUT")
+    # Hard ceiling on time-to-first-*visible*-token for /chat/stream, enforced
+    # in rag.llm.stream_answer. This is the only bound that does not multiply by
+    # the attempt count, which is what makes it the effective one: the SDK runs
+    # its whole retry loop inside the first __anext__, so this deadline cuts a
+    # cascade short wherever it has got to. 0 disables it.
+    llm_first_token_timeout: float = Field(
+        default=30.0, alias="LLM_FIRST_TOKEN_TIMEOUT"
+    )
+    # Guards a stream that connects and then goes quiet mid-answer.
+    # langchain_openai's own knob (stream_chunk_timeout) defaults to 120s, far
+    # too long to leave a half-written answer on screen. It measures the gap
+    # between *parsed* chunks, so a reasoning model's content-free
+    # reasoning_content deltas keep it alive and it fires only on real silence.
+    # Applied after the request succeeds, so it is not retried and does not
+    # multiply. 0 disables it.
+    llm_stream_stall_timeout: float = Field(
+        default=30.0, alias="LLM_STREAM_STALL_TIMEOUT"
+    )
 
     # HTTP connection pool for the LLM client. These only take effect where the
     # provider is given an explicit httpx client (AgentRouter, which needs one
@@ -365,11 +415,17 @@ class Settings(BaseSettings):
     # depends on which one you are optimising:
     #
     #   LATENCY (one request at a time). More threads is better. Measured on a
-    #   4-core box, 32 pairs of ms-marco-MiniLM-L-6-v2:
-    #       1 thread          5312ms   (166.0ms/pair)
+    #   4-core box, 32 pairs of ms-marco-MiniLM-L-6-v2, fp32:
+    #       1 thread          5312ms
     #       2 threads (torch default on 4 cores)
-    #                         4987ms   (155.8ms/pair)
-    #       4 threads         3933ms   (122.9ms/pair)   <- 1.27x over default
+    #                         4987ms
+    #       4 threads         3933ms            <- 1.27x over the default
+    #
+    #   CAVEAT on those three numbers: they were measured COLD, so each includes
+    #   one-off graph setup. Warm, the same 32 pairs take ~0.6-0.7s (18-26ms per
+    #   pair), so treat the ratio as indicative and the absolutes as junk. The
+    #   ordering has not been re-measured warm; if you need to defend this
+    #   default, re-run it warm rather than citing the table above.
     #
     #   THROUGHPUT (many concurrent requests). Fewer threads is better. With N
     #   requests each spawning 4 threads on 4 cores the process oversubscribes
@@ -938,6 +994,24 @@ class Settings(BaseSettings):
 
         return problems
 
+    @property
+    def llm_transport_worst_case_seconds(self) -> float:
+        """Longest one LLM call can spend in the HTTP layer before giving up.
+
+        Exposed so the number is *asserted* rather than emergent. The ~91s
+        cascade of 2026-08-12 was not a decision anyone made — it was
+        ``30 x (1 + 2)``, noticed only after students had waited through it.
+        Anything that changes ``llm_timeout`` or ``llm_max_retries`` moves this,
+        and ``log_llm_config`` prints it at startup so it cannot drift unseen.
+        """
+        attempts = 1 + max(0, self.llm_max_retries)
+        # openai._constants.INITIAL_RETRY_DELAY = 0.5, doubling per retry and
+        # capped at MAX_RETRY_DELAY = 8.0; see
+        # openai._base_client._calculate_retry_timeout. Jitter only ever reduces
+        # it (x0.75-1.0), so this is an upper bound.
+        backoff = sum(min(0.5 * 2**i, 8.0) for i in range(attempts - 1))
+        return self.llm_timeout * attempts + backoff
+
     def log_llm_config(self) -> None:
         """Print the active LLM provider and any configuration problems."""
         model = {
@@ -948,6 +1022,25 @@ class Settings(BaseSettings):
             "ollama": self.ollama_model,
         }.get(self.llm_provider, "?")
         print(f"[config] llm_provider → {self.llm_provider} (model: {model})")
+        worst = self.llm_transport_worst_case_seconds
+        first_token = self.llm_first_token_timeout
+        print(
+            f"[config] llm failure budget → {self.llm_timeout}s x "
+            f"{1 + max(0, self.llm_max_retries)} attempts = {worst:.0f}s transport "
+            f"worst case; first-token ceiling "
+            f"{f'{first_token:.0f}s' if first_token > 0 else 'DISABLED'}"
+        )
+        if first_token <= 0:
+            print(
+                "[config] WARNING: LLM_FIRST_TOKEN_TIMEOUT=0 — a streaming reply "
+                f"can now show nothing for the full {worst:.0f}s transport budget."
+            )
+        elif first_token > worst:
+            print(
+                f"[config] WARNING: LLM_FIRST_TOKEN_TIMEOUT={first_token:.0f}s "
+                f"exceeds the {worst:.0f}s transport budget, so it can never fire. "
+                "Lower it, or raise LLM_TIMEOUT/LLM_MAX_RETRIES deliberately."
+            )
         for problem in self.validate_llm_config():
             print(f"[config] WARNING: {problem}")
 

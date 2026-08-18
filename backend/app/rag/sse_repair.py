@@ -176,9 +176,15 @@ class SSERepairTransport(httpx.AsyncBaseTransport):
 
 
 def build_repaired_async_client(
-    *, timeout: float, max_connections: int, max_keepalive: int
+    *, timeout: float | httpx.Timeout, max_connections: int, max_keepalive: int
 ) -> httpx.AsyncClient:
     """An ``httpx.AsyncClient`` that transparently drops null SSE frames.
+
+    ``timeout`` accepts an ``httpx.Timeout`` so callers can budget connect and
+    read separately — reaching an unreachable host and waiting on a slow
+    generation are different failures on different timescales. Note that
+    whatever is passed here is only honoured if the OpenAI SDK is given no
+    timeout of its own; see the note at the ``ChatOpenAI`` call in ``rag.llm``.
 
     Limits are passed in rather than left to httpx's defaults (10 connections,
     5 keep-alive) because supplying a client to ``ChatOpenAI`` overrides the

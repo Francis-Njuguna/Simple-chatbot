@@ -588,14 +588,20 @@ class HybridRetriever:
         # fixed threshold, so the count is a recall/precision dial and 2 is
         # where it is measurably best.
         #
-        # What it costs: every form multiplies the pairs scored, and on a 4-core
-        # CPU box a pair is 123-166ms, so shortlist x forms IS the retrieval
-        # latency — the "~0.4s for 16 passages" this comment used to claim was
-        # off by ~20x on that hardware. The two factors are not interchangeable:
-        # shortlist 16->8 measured quality-identical, while forms 2->1 cost
-        # synonym recall 1.000->0.750 and partial 0.667->0.000. Shrink the
-        # shortlist, never the forms. Both forms are scored in ONE batched
-        # predict() call — see CrossEncoderReranker.score_multi.
+        # What it costs: every form multiplies the pairs scored, so shortlist x
+        # forms IS the cross-encoder's share of retrieval latency. Warm on a
+        # 4-core CPU box a pair is 18-26ms, i.e. the shipped 8 x 2 = 16 pairs is
+        # ~0.4s. (Two wrong figures have lived in this comment: "~0.4s for 16
+        # passages" was accidentally right, and the "123-166ms per pair" that
+        # replaced it was measured cold and is wrong. Production sometimes
+        # implies ~271ms/pair, but that is host starvation showing up in the
+        # biggest CPU stage — the same logs show 1,848ms of pure string
+        # formatting — so it must not be papered over by cutting these two
+        # settings. See RERANK_LATENCY.md.)
+        # The two factors are not interchangeable: shortlist 16->8 measured
+        # quality-identical, while forms 2->1 cost synonym recall 1.000->0.750
+        # and partial 0.667->0.000. Shrink the shortlist, never the forms. Both
+        # forms are scored in ONE batched predict() — see score_multi.
         reranker = get_reranker()
         rerank_texts = [pool_by_id[cid]["text"] for cid in selected_ids]
         # The NORMALISED query, not the raw original: typo correction is exactly
