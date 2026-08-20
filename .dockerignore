@@ -160,6 +160,7 @@ docs/
 .env
 .env.local
 .env.*.local
+.claude/
 *.pem
 *.key
 *.crt

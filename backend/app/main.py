@@ -252,6 +252,13 @@ async def lifespan(app: FastAPI):
     # Report the active LLM provider and any missing/placeholder credentials
     # before anything tries to use it.
     settings.log_llm_config()
+    if settings.is_production:
+        production_problems = settings.validate_production_config()
+        if production_problems:
+            raise RuntimeError(
+                "Production configuration is unsafe or incomplete: "
+                + " | ".join(production_problems)
+            )
 
     await init_db()
     await _warmup()
@@ -285,8 +292,8 @@ app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
+    allow_origins=settings.cors_origin_list,
+    allow_credentials=settings.cors_allow_credentials,
     allow_methods=["*"],
     allow_headers=["*"],
     # Without this the browser hides X-Request-ID from JS, so a user reporting a

@@ -50,9 +50,13 @@ services:
 
       # --- LLM ---
       LLM_PROVIDER: openai
-      OPENAI_MODEL: gpt-4o
-      # Optional: override to a Qwen-compatible OpenAI endpoint via .env
-      # OPENAI_API_BASE: ${OPENAI_API_BASE}
+      OPENAI_API_BASE: https://integrate.api.nvidia.com/v1
+      OPENAI_MODEL: meta/llama-3.1-8b-instruct
+      LLM_MAX_CONCURRENCY: "1"
+      LLM_QUEUE_TIMEOUT: "60"
+      CHAT_RATE_LIMIT: 20/minute
+      CORS_ORIGINS: http://localhost:8501,http://localhost:8080,http://127.0.0.1:8501,http://127.0.0.1:8080
+      CORS_ALLOW_CREDENTIALS: "true"
 
       # --- Embeddings (sentence-transformers — no Ollama needed) ---
       EMBEDDING_PROVIDER: sentence-transformers

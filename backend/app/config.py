@@ -55,6 +55,14 @@ class Settings(BaseSettings):
     # decorator takes a literal), so changing it needs a server restart.
     chat_rate_limit: str = Field(default="20/minute", alias="CHAT_RATE_LIMIT")
 
+    llm_max_concurrency: int = Field(default=1, alias="LLM_MAX_CONCURRENCY")
+    llm_queue_timeout: float = Field(default=60.0, alias="LLM_QUEUE_TIMEOUT")
+    cors_origins: str = Field(
+        default="http://localhost:8501,http://localhost:8080,http://127.0.0.1:8501,http://127.0.0.1:8080",
+        alias="CORS_ORIGINS",
+    )
+    cors_allow_credentials: bool = Field(default=True, alias="CORS_ALLOW_CREDENTIALS")
+
     # ------------------------------------------------------------------
     # PostgreSQL — individual credential components
     # These must match the POSTGRES_* env vars given to the postgres
@@ -756,6 +764,10 @@ class Settings(BaseSettings):
         return (self.app_env or "").strip().lower() in {"production", "prod", "staging"}
 
     @property
+    def cors_origin_list(self) -> list[str]:
+        return [origin.strip() for origin in self.cors_origins.split(",") if origin.strip()]
+
+    @property
     def retrieval_debug_active(self) -> bool:
         """Whether to emit per-query retrieval diagnostics.
 
@@ -948,7 +960,14 @@ class Settings(BaseSettings):
 
         def _placeholder(value: str) -> bool:
             low = value.lower()
-            return "your-" in low or "-here" in low or "<" in low
+            return (
+                "your-" in low
+                or "-here" in low
+                or "replace-" in low
+                or "placeholder" in low
+                or "change-me" in low
+                or "<" in low
+            )
 
         if provider == "agentrouter":
             if not self.agentrouter_api_key:
@@ -977,6 +996,8 @@ class Settings(BaseSettings):
                 problems.append("OPENAI_API_KEY is still a placeholder value.")
             if self.openai_api_base and _placeholder(self.openai_api_base):
                 problems.append("OPENAI_API_BASE is still a placeholder value.")
+            if not self.openai_model or _placeholder(self.openai_model):
+                problems.append("OPENAI_MODEL is empty or still a placeholder value.")
         elif provider == "anthropic":
             if not self.anthropic_auth_key:
                 problems.append("ANTHROPIC_AUTH_KEY / ANTHROPIC_API_KEY is not set.")
@@ -992,6 +1013,22 @@ class Settings(BaseSettings):
                 "ignored. Remove it to avoid confusion."
             )
 
+        return problems
+
+    def validate_production_config(self) -> list[str]:
+        problems: list[str] = []
+        secret = (self.secret_key or "").strip()
+        if len(secret) < 32 or secret.lower() in {"change-me", "change-me-to-a-long-random-string"}:
+            problems.append("SECRET_KEY must be a long random production secret (at least 32 characters).")
+        if self.cors_allow_credentials and "*" in self.cors_origin_list:
+            problems.append("CORS_ORIGINS cannot contain '*' when CORS_ALLOW_CREDENTIALS=true.")
+        if any("<" in origin or ">" in origin for origin in self.cors_origin_list):
+            problems.append("CORS_ORIGINS still contains a deployment placeholder domain.")
+        if self.llm_max_concurrency < 1:
+            problems.append("LLM_MAX_CONCURRENCY must be at least 1.")
+        if self.llm_queue_timeout <= 0:
+            problems.append("LLM_QUEUE_TIMEOUT must be greater than zero in production.")
+        problems.extend(self.validate_llm_config())
         return problems
 
     @property

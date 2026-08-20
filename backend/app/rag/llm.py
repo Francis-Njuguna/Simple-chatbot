@@ -24,6 +24,10 @@ from backend.app.utils.logging import get_logger
 logger = get_logger(__name__)
 
 
+class LLMQueueBusyError(TimeoutError):
+    """Raised when the bounded outbound-generation queue is full."""
+
+
 class LLMService:
     """Configurable LLM provider for answer generation.
 
@@ -38,6 +42,30 @@ class LLMService:
     def __init__(self) -> None:
         self.settings = get_settings()
         self._llm = self._build_llm()
+        self._generation_gate: asyncio.Semaphore | None = None
+
+    def _ensure_generation_gate(self) -> asyncio.Semaphore:
+        gate = getattr(self, "_generation_gate", None)
+        if gate is None:
+            gate = asyncio.Semaphore(max(1, int(self.settings.llm_max_concurrency)))
+            self._generation_gate = gate
+        return gate
+
+    async def _acquire_generation_slot(self) -> asyncio.Semaphore:
+        gate = self._ensure_generation_gate()
+        timeout = float(getattr(self.settings, "llm_queue_timeout", 0.0) or 0.0)
+        try:
+            if timeout > 0:
+                await asyncio.wait_for(gate.acquire(), timeout=timeout)
+            else:
+                await gate.acquire()
+        except TimeoutError as exc:
+            raise LLMQueueBusyError from exc
+        return gate
+
+    @staticmethod
+    def _queue_busy_message() -> str:
+        return "The help desk is handling other requests right now. Please try again in a moment."
 
     def _build_llm(self) -> Any:
         provider = self.settings.llm_provider
@@ -471,21 +499,41 @@ class LLMService:
                 else len(prompt)
             )
 
-        started = time.perf_counter()
+        queued_at = time.perf_counter()
+        provider_started: float | None = None
+        gate: asyncio.Semaphore | None = None
         try:
+            gate = await self._acquire_generation_slot()
+            provider_started = time.perf_counter()
+            if stats is not None:
+                stats["llm_queue_ms"] = (provider_started - queued_at) * 1000.0
             response = await self._llm.ainvoke(prompt)
             if stats is not None:
-                stats["llm_call_ms"] = (time.perf_counter() - started) * 1000.0
+                stats["llm_call_ms"] = (time.perf_counter() - provider_started) * 1000.0
                 stats.update(self._usage(response))
                 stats["ok"] = True
             return self._extract_text(response)
+        except LLMQueueBusyError as exc:
+            if stats is not None:
+                stats["llm_queue_ms"] = (time.perf_counter() - queued_at) * 1000.0
+                stats["llm_call_ms"] = 0.0
+                stats["ok"] = False
+                stats["error"] = type(exc).__name__
+            return self._queue_busy_message()
         except Exception as exc:
             if stats is not None:
-                stats["llm_call_ms"] = (time.perf_counter() - started) * 1000.0
+                stats["llm_call_ms"] = (
+                    (time.perf_counter() - provider_started) * 1000.0
+                    if provider_started is not None
+                    else 0.0
+                )
                 stats["ok"] = False
                 stats["error"] = type(exc).__name__
             logger.exception("LLM generation failed")
             return self._error_message(exc)
+        finally:
+            if gate is not None:
+                gate.release()
 
     async def complete(self, system: str, user: str) -> str:
         """Run a one-off prompt with no chat scaffolding.
@@ -498,8 +546,12 @@ class LLMService:
             prompt: Any = [SystemMessage(content=system), HumanMessage(content=user)]
         else:
             prompt = f"{system}\n\n{user}"
-        response = await self._llm.ainvoke(prompt)
-        return self._extract_text(response)
+        gate = await self._acquire_generation_slot()
+        try:
+            response = await self._llm.ainvoke(prompt)
+            return self._extract_text(response)
+        finally:
+            gate.release()
 
     async def stream_answer(
         self,
@@ -533,11 +585,15 @@ class LLMService:
         # timeout: a reasoning model streams many content-free deltas before any
         # answer text, and re-arming the clock on each of those would let the
         # total wait grow without limit while every individual wait looked fine.
-        deadline = (time.monotonic() + budget) if budget > 0 else None
+        deadline = None
         yielded_any = False
 
-        iterator = self._llm.astream(prompt).__aiter__()
+        gate: asyncio.Semaphore | None = None
+        iterator = None
         try:
+            gate = await self._acquire_generation_slot()
+            deadline = (time.monotonic() + budget) if budget > 0 else None
+            iterator = self._llm.astream(prompt).__aiter__()
             while True:
                 try:
                     if deadline is None:
@@ -560,6 +616,8 @@ class LLMService:
                     deadline = None
                     yielded_any = True
                     yield text
+        except LLMQueueBusyError:
+            yield self._queue_busy_message()
         except TimeoutError:
             # asyncio.TimeoutError is an alias of the builtin from 3.11, and
             # langchain's StreamChunkTimeoutError subclasses it — so this branch
@@ -600,7 +658,12 @@ class LLMService:
         finally:
             # Release the httpx connection now rather than at GC. Matters most
             # on the timeout path, where the request is still open.
-            await iterator.aclose()
+            try:
+                if iterator is not None:
+                    await iterator.aclose()
+            finally:
+                if gate is not None:
+                    gate.release()
 
 
 # ---------------------------------------------------------------------------

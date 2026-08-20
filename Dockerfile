@@ -42,7 +42,10 @@ FROM base AS backend
 
 # Install backend Python deps first (layer-cached unless requirements change)
 COPY requirements-backend.txt ./
-RUN pip install --no-cache-dir -r requirements-backend.txt
+# Install the CPU-only torch wheel before sentence-transformers so a CPU Railway
+# service does not resolve hundreds of megabytes of CUDA runtime packages.
+RUN pip install --no-cache-dir --index-url https://download.pytorch.org/whl/cpu "torch>=2.2" \
+    && pip install --no-cache-dir -r requirements-backend.txt --extra-index-url https://download.pytorch.org/whl/cpu
 
 # Copy source
 COPY pyproject.toml README.md ./
@@ -53,7 +56,10 @@ COPY data    ./data
 # Install the backend package in editable mode so that
 # `import backend` works from any working directory (fixes
 # ModuleNotFoundError: No module named 'backend' in scripts/)
-RUN pip install --no-cache-dir -e .
+# Backend dependencies were installed from requirements-backend.txt above.
+# Avoid pulling frontend-only project dependencies (Streamlit/PyArrow) into
+# this image when registering the local package.
+RUN pip install --no-cache-dir --no-deps -e .
 
 RUN mkdir -p logs data/chroma backend/app/static/images
 
