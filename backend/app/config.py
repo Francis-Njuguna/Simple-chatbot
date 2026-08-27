@@ -53,7 +53,7 @@ class Settings(BaseSettings):
     # concurrency level above it measures the rate limiter rather than the
     # server's actual capacity. Read once at route-import time (slowapi's
     # decorator takes a literal), so changing it needs a server restart.
-    chat_rate_limit: str = Field(default="20/minute", alias="CHAT_RATE_LIMIT")
+    chat_rate_limit: str = Field(default="5/minute", alias="CHAT_RATE_LIMIT")
 
     llm_max_concurrency: int = Field(default=1, alias="LLM_MAX_CONCURRENCY")
     llm_queue_timeout: float = Field(default=60.0, alias="LLM_QUEUE_TIMEOUT")
@@ -105,11 +105,12 @@ class Settings(BaseSettings):
     chroma_persist_dir: str = Field(default="./data/chroma", alias="CHROMA_PERSIST_DIR")
 
     # ------------------------------------------------------------------
-    # LLM — OpenAI-compatible (primary), AgentRouter, Gemini, Anthropic, Ollama
+    # LLM — NVIDIA NIM through its OpenAI-compatible API is production primary.
+    # Other provider branches remain available for diagnostics/legacy deployments.
     # Provider options: "openai" | "agentrouter" | "gemini" | "anthropic" | "ollama"
     # ------------------------------------------------------------------
     llm_provider: Literal["openai", "agentrouter", "gemini", "anthropic", "ollama"] = Field(
-        default="gemini", alias="LLM_PROVIDER"
+        default="openai", alias="LLM_PROVIDER"
     )
 
     # LLM runtime knobs (previously missing) — critical for stable builds.
@@ -183,14 +184,21 @@ class Settings(BaseSettings):
         default=100, alias="LLM_MAX_KEEPALIVE_CONNECTIONS"
     )
 
-    # OpenAI-compatible provider (default)
-    openai_api_key: str = Field(default="", alias="OPENAI_API_KEY")
-    openai_model: str = Field(default="gpt-4o", alias="OPENAI_MODEL")
+    # NVIDIA/OpenAI-compatible provider (production default)
+    openai_api_key: str = Field(
+        default="",
+        validation_alias=AliasChoices("OPENAI_API_KEY", "NVIDIA_API_KEY"),
+    )
+    openai_model: str = Field(
+        default="meta/llama-3.1-8b-instruct", alias="OPENAI_MODEL"
+    )
     # Optional API base for OpenAI-compatible endpoints (e.g. Qwen providers,
     # local Ollama OpenAI-compatible servers). When set, the runtime will target
     # this base URL instead of api.openai.com. If the local endpoint is unauthenticated,
     # OPENAI_API_KEY may be omitted and a dummy key is used for compatibility.
-    openai_api_base: str | None = Field(default=None, alias="OPENAI_API_BASE")
+    openai_api_base: str | None = Field(
+        default="https://integrate.api.nvidia.com/v1", alias="OPENAI_API_BASE"
+    )
 
     # ------------------------------------------------------------------
     # AgentRouter — Anthropic Claude models via an OpenAI-compatible endpoint
@@ -990,7 +998,10 @@ class Settings(BaseSettings):
             if not self.agentrouter_model:
                 problems.append("AGENTROUTER_MODEL is empty.")
         elif provider == "openai":
-            if not self.openai_api_key and not self.openai_api_base:
+            is_nvidia = "integrate.api.nvidia.com" in (self.openai_api_base or "")
+            if not self.openai_api_key and is_nvidia:
+                problems.append("OPENAI_API_KEY / NVIDIA_API_KEY is not set.")
+            elif not self.openai_api_key and not self.openai_api_base:
                 problems.append("OPENAI_API_KEY is not set.")
             elif self.openai_api_key and _placeholder(self.openai_api_key):
                 problems.append("OPENAI_API_KEY is still a placeholder value.")

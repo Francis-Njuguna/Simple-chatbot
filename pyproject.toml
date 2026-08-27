@@ -7,7 +7,6 @@ requires-python = ">=3.11"
 dependencies = [
     "fastapi>=0.115.0",
     "uvicorn[standard]>=0.32.0",
-    "streamlit>=1.40.0",
     # Database — PostgreSQL (Docker)
     "sqlalchemy[asyncio]>=2.0.36",
     "asyncpg>=0.30.0",
@@ -61,6 +60,7 @@ dependencies = [
 dev = [
     "pytest>=8.3.4",
     "pytest-asyncio>=0.24.0",
+    "brotli>=1.1.0",
     "httpx>=0.28.1",
     "ruff>=0.8.4",
 ]
@@ -76,6 +76,9 @@ packages = ["backend"]
 asyncio_mode = "auto"
 testpaths = ["tests"]
 pythonpath = ["."]
+markers = [
+    "live: makes a real request to an external provider",
+]
 
 [tool.ruff]
 line-length = 100

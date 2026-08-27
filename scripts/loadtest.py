@@ -26,7 +26,7 @@ as a distribution, and errors are broken out by cause rather than counted.
 
 Rate limiting
 -------------
-/chat is limited per-IP (CHAT_RATE_LIMIT, default 20/minute). A load test from
+/chat is limited per-IP (CHAT_RATE_LIMIT, default 5/minute). A load test from
 one machine trips this within seconds, after which the run measures slowapi
 rather than the server. Raise it for the test run and RESTART the server —
 slowapi's decorator captures the value at import time:
@@ -446,7 +446,7 @@ async def preflight(base_url: str, timeout_s: float) -> bool:
     """Verify the server is up and the rate limiter will not invalidate the run.
 
     Sends a small burst and checks for 429s. Running a full ramp against a
-    limiter set to 20/minute produces a chart of the limiter, so this refuses
+    limiter set to 5/minute produces a chart of the limiter, so this refuses
     rather than letting it happen quietly.
     """
     print("pre-flight")
@@ -462,7 +462,7 @@ async def preflight(base_url: str, timeout_s: float) -> bool:
             print("    ./.venv/Scripts/python.exe -m uvicorn backend.app.main:app --port 8000")
             return False
 
-        # 25 rapid requests: above the 20/minute default, below anything sane
+        # 25 rapid requests: above the 5/minute default, below anything sane
         # for a load test. If none are refused, the limit has been raised.
         chat_url = f"{base_url.rstrip('/')}/api/v1/chat"
         probes = await asyncio.gather(

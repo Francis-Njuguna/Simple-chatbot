@@ -2,6 +2,8 @@ fastapi>=0.115.0
 uvicorn[standard]>=0.32.0
 sqlalchemy[asyncio]>=2.0.36
 asyncpg>=0.30.0
+# Alembic runs synchronous migrations during startup.
+psycopg2-binary>=2.9.9
 alembic>=1.14.0
 chromadb>=0.5.23
 langchain>=0.3.14

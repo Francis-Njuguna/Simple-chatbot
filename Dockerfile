@@ -49,6 +49,8 @@ RUN pip install --no-cache-dir --index-url https://download.pytorch.org/whl/cpu 
 
 # Copy source
 COPY pyproject.toml README.md ./
+COPY alembic.ini ./
+COPY alembic ./alembic
 COPY backend ./backend
 COPY scripts ./scripts
 COPY data    ./data

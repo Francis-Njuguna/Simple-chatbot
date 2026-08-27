@@ -243,12 +243,15 @@ def test_validation_never_leaks_the_credential() -> None:
 
 
 def _live_key() -> str:
-    """The real key, only if the environment actually has one configured."""
+    """Return a key only when the legacy live test was explicitly requested."""
+    if os.getenv("RUN_AGENTROUTER_LIVE") != "1":
+        return ""
     settings = get_settings()
     return os.getenv("AGENTROUTER_API_KEY") or settings.agentrouter_api_key or ""
 
 
 @pytest.mark.asyncio
+@pytest.mark.live
 async def test_live_agentrouter_generates_a_grounded_answer() -> None:
     """A real AgentRouter → Claude call answers from the supplied context.
 
@@ -292,6 +295,7 @@ async def test_live_agentrouter_generates_a_grounded_answer() -> None:
 
 
 @pytest.mark.asyncio
+@pytest.mark.live
 async def test_live_agentrouter_answers_a_short_keyword_query() -> None:
     """A bare keyword must not be declined when the context covers it.
 

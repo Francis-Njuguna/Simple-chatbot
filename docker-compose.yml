@@ -54,7 +54,7 @@ services:
       OPENAI_MODEL: meta/llama-3.1-8b-instruct
       LLM_MAX_CONCURRENCY: "1"
       LLM_QUEUE_TIMEOUT: "60"
-      CHAT_RATE_LIMIT: 20/minute
+      CHAT_RATE_LIMIT: 5/minute
       CORS_ORIGINS: http://localhost:8501,http://localhost:8080,http://127.0.0.1:8501,http://127.0.0.1:8080
       CORS_ALLOW_CREDENTIALS: "true"
 
@@ -78,6 +78,7 @@ services:
     command: uvicorn backend.app.main:app --host 0.0.0.0 --port 8000 --workers 1
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      start_period: 5m
       interval: 30s
       timeout: 10s
       retries: 3

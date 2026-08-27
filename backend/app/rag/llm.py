@@ -257,6 +257,11 @@ class LLMService:
                 )
             os.environ.setdefault("OPENAI_API_BASE", self.settings.openai_api_base)
             logger.info("OpenAI API base overridden: %s", self.settings.openai_api_base)
+            is_nvidia = "integrate.api.nvidia.com" in self.settings.openai_api_base
+            if is_nvidia and not openai_api_key:
+                raise RuntimeError(
+                    "OPENAI_API_KEY / NVIDIA_API_KEY is required for NVIDIA NIM."
+                )
             if not openai_api_key:
                 logger.warning(
                     "OPENAI_API_KEY is not set. Using local OpenAI-compatible endpoint without authentication. "
