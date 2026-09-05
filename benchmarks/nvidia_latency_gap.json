@@ -1,0 +1,155 @@
+{
+  "model": "nvidia/nemotron-3-super-120b-a12b",
+  "rows": [
+    {
+      "question": "How do I set up Microsoft Authenticator?",
+      "context_chars": 2561,
+      "system_chars": 6323,
+      "user_chars": 3616,
+      "raw": {
+        "path": "raw_nvidia_sse",
+        "headers_s": 0.8539484999491833,
+        "ttft_from_request_s": 56.769227999961004,
+        "total_s": 77.44208089995664,
+        "reasoning_chars": 4831,
+        "answer_chars": 2384,
+        "output_tokens": 1742,
+        "statuses": [
+          200
+        ],
+        "error": ""
+      },
+      "app": {
+        "path": "LLMService_stream_answer",
+        "headers_s": null,
+        "ttft_from_request_s": 16.081589600013103,
+        "total_s": 24.943510300014168,
+        "reasoning_chars": null,
+        "answer_chars": 1426,
+        "output_tokens": null,
+        "statuses": null,
+        "error": ""
+      }
+    },
+    {
+      "question": "How do I log in to the LMS?",
+      "context_chars": 3422,
+      "system_chars": 6323,
+      "user_chars": 4643,
+      "raw": {
+        "path": "raw_nvidia_sse",
+        "headers_s": 0.7211815000046045,
+        "ttft_from_request_s": 11.669341899978463,
+        "total_s": 18.404592300008517,
+        "reasoning_chars": 1701,
+        "answer_chars": 1671,
+        "output_tokens": 845,
+        "statuses": [
+          200
+        ],
+        "error": ""
+      },
+      "app": {
+        "path": "LLMService_stream_answer",
+        "headers_s": null,
+        "ttft_from_request_s": 1.6555588999763131,
+        "total_s": 3.6071494999923743,
+        "reasoning_chars": null,
+        "answer_chars": 1191,
+        "output_tokens": null,
+        "statuses": null,
+        "error": ""
+      }
+    },
+    {
+      "question": "How do I reset my student portal password?",
+      "context_chars": 3376,
+      "system_chars": 6323,
+      "user_chars": 4527,
+      "raw": {
+        "path": "raw_nvidia_sse",
+        "headers_s": 0.3891402999870479,
+        "ttft_from_request_s": 7.7548087000031956,
+        "total_s": 18.2770620000083,
+        "reasoning_chars": 1352,
+        "answer_chars": 2514,
+        "output_tokens": 953,
+        "statuses": [
+          200
+        ],
+        "error": ""
+      },
+      "app": {
+        "path": "LLMService_stream_answer",
+        "headers_s": null,
+        "ttft_from_request_s": 2.9774743000161834,
+        "total_s": 6.781837999995332,
+        "reasoning_chars": null,
+        "answer_chars": 1751,
+        "output_tokens": null,
+        "statuses": null,
+        "error": ""
+      }
+    },
+    {
+      "question": "What is SMOWL proctoring?",
+      "context_chars": 1842,
+      "system_chars": 6323,
+      "user_chars": 2874,
+      "raw": {
+        "path": "raw_nvidia_sse",
+        "headers_s": 0.7155580000253394,
+        "ttft_from_request_s": 19.0671131000272,
+        "total_s": 28.938752299989574,
+        "reasoning_chars": 4746,
+        "answer_chars": 1364,
+        "output_tokens": 1490,
+        "statuses": [
+          200
+        ],
+        "error": ""
+      },
+      "app": {
+        "path": "LLMService_stream_answer",
+        "headers_s": null,
+        "ttft_from_request_s": 2.212292600015644,
+        "total_s": 2.212487200042233,
+        "reasoning_chars": null,
+        "answer_chars": 220,
+        "output_tokens": null,
+        "statuses": null,
+        "error": "application error/fallback"
+      }
+    },
+    {
+      "question": "Please help me log in.",
+      "context_chars": 3115,
+      "system_chars": 6323,
+      "user_chars": 4405,
+      "raw": {
+        "path": "raw_nvidia_sse",
+        "headers_s": 0.3916367999627255,
+        "ttft_from_request_s": 5.993222199962474,
+        "total_s": 20.008002499991562,
+        "reasoning_chars": 1436,
+        "answer_chars": 1903,
+        "output_tokens": 814,
+        "statuses": [
+          200
+        ],
+        "error": ""
+      },
+      "app": {
+        "path": "LLMService_stream_answer",
+        "headers_s": null,
+        "ttft_from_request_s": 11.743021600006614,
+        "total_s": 16.990585799969267,
+        "reasoning_chars": null,
+        "answer_chars": 1837,
+        "output_tokens": null,
+        "statuses": null,
+        "error": ""
+      }
+    }
+  ]
+}

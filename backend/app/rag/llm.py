@@ -18,7 +18,13 @@ from typing import Any
 from langchain_core.messages import HumanMessage, SystemMessage
 
 from backend.app.config import get_settings
-from backend.app.prompts.templates import NO_IMAGES_NOTE, SYSTEM_PROMPT, USER_PROMPT_TEMPLATE
+from backend.app.prompts.templates import (
+    COMPACT_SYSTEM_PROMPT,
+    COMPACT_USER_PROMPT_TEMPLATE,
+    NO_IMAGES_NOTE,
+    SYSTEM_PROMPT,
+    USER_PROMPT_TEMPLATE,
+)
 from backend.app.utils.logging import get_logger
 
 logger = get_logger(__name__)
@@ -298,20 +304,27 @@ class LLMService:
     def _build_messages(
         self, question: str, context: str, history: str, images: str
     ) -> list[Any]:
-        user_prompt = USER_PROMPT_TEMPLATE.format(
+        system_prompt, user_template = self._prompt_templates()
+        user_prompt = user_template.format(
             context=context,
             images=images,
             history=history,
             question=question,
         )
         return [
-            SystemMessage(content=SYSTEM_PROMPT),
+            SystemMessage(content=system_prompt),
             HumanMessage(content=user_prompt),
         ]
 
+    def _prompt_templates(self) -> tuple[str, str]:
+        if getattr(self.settings, "llm_prompt_profile", "legacy") == "compact":
+            return COMPACT_SYSTEM_PROMPT, COMPACT_USER_PROMPT_TEMPLATE
+        return SYSTEM_PROMPT, USER_PROMPT_TEMPLATE
+
     def _build_prompt(self, question: str, context: str, history: str, images: str) -> str:
+        system_prompt, user_template = self._prompt_templates()
         return "\n\n".join(
-            [SYSTEM_PROMPT, USER_PROMPT_TEMPLATE.format(
+            [system_prompt, user_template.format(
                 context=context,
                 images=images,
                 history=history,
@@ -358,6 +371,25 @@ class LLMService:
             # why the non-streaming path keeps the space.
             return _clean(("" if not strip else " ").join(parts))
         return _clean(str(content))
+
+    @staticmethod
+    def _extract_reasoning_chars(chunk: Any) -> int:
+        """Count provider reasoning deltas for diagnostics without exposing them."""
+        total = 0
+        for attr in ("additional_kwargs", "response_metadata"):
+            value = getattr(chunk, attr, None) or {}
+            if isinstance(value, dict):
+                for key in ("reasoning_content", "reasoning"):
+                    raw = value.get(key)
+                    if isinstance(raw, str):
+                        total += len(raw)
+        content = getattr(chunk, "content", None)
+        if isinstance(content, list):
+            for block in content:
+                if isinstance(block, dict) and block.get("type") in {"reasoning", "thinking"}:
+                    raw = block.get("text") or block.get("content") or ""
+                    total += len(raw) if isinstance(raw, str) else 0
+        return total
  
     def _error_message(self, exc: Exception) -> str:
         """Return a user-facing message describing an LLM *failure*.
@@ -564,6 +596,7 @@ class LLMService:
         context: str,
         history: str = "No prior conversation.",
         images: str = NO_IMAGES_NOTE,
+        stats: dict[str, Any] | None = None,
     ):
         """Yield answer chunks as they arrive (for streaming responses).
 
@@ -586,6 +619,13 @@ class LLMService:
             prompt = self._build_prompt(question, context, history, images)
 
         budget = float(self.settings.llm_first_token_timeout or 0.0)
+        started = time.perf_counter()
+        if stats is not None:
+            stats["prompt_chars"] = (
+                sum(len(str(m.content)) for m in prompt)
+                if isinstance(prompt, list)
+                else len(prompt)
+            )
         # One deadline for the whole pre-first-token phase, not a per-chunk
         # timeout: a reasoning model streams many content-free deltas before any
         # answer text, and re-arming the clock on each of those would let the
@@ -615,15 +655,33 @@ class LLMService:
                 # strip=False: leading/trailing spaces inside a delta are part
                 # of the answer. See _extract_text.
                 text = self._extract_text(chunk, strip=False)
+                if stats is not None:
+                    usage = self._usage(chunk)
+                    if usage:
+                        stats.update(usage)
+                    stats["reasoning_chars"] = stats.get("reasoning_chars", 0) + self._extract_reasoning_chars(chunk)
                 if text:
                     # Only real text stops the clock — see the note above on
                     # content-free deltas.
                     deadline = None
                     yielded_any = True
+                    if stats is not None and "ttft_ms" not in stats:
+                        stats["ttft_ms"] = (time.perf_counter() - started) * 1000.0
+                    if stats is not None:
+                        stats["answer_chars"] = stats.get("answer_chars", 0) + len(text)
                     yield text
+            if stats is not None:
+                stats["llm_generation_ms"] = (time.perf_counter() - started) * 1000.0
+                stats["ok"] = yielded_any
         except LLMQueueBusyError:
+            if stats is not None:
+                stats["ok"] = False
+                stats["error"] = "LLMQueueBusyError"
             yield self._queue_busy_message()
         except TimeoutError:
+            if stats is not None:
+                stats["ok"] = False
+                stats["error"] = "TimeoutError"
             # asyncio.TimeoutError is an alias of the builtin from 3.11, and
             # langchain's StreamChunkTimeoutError subclasses it — so this branch
             # catches both of our deadlines and has to say which one fired.
@@ -658,6 +716,9 @@ class LLMService:
                     "knowledge base — please try again."
                 )
         except Exception as exc:
+            if stats is not None:
+                stats["ok"] = False
+                stats["error"] = type(exc).__name__
             logger.exception("LLM streaming failed")
             yield self._error_message(exc)
         finally:

@@ -60,6 +60,12 @@ pipeline has been in-process without uvicorn; every slow one has been inside the
 server. Memory pressure is correspondingly demoted: it should have degraded the
 in-process run too, and did not.
 
+> **SUPERSEDED 2026-09-02 — the decisive test was run the same evening this was
+> written, and it clears `--reload`.** See "2026-09-02 — the decisive test, found
+> in the logs" below. The paragraph immediately following was true when written
+> and is false now; it is kept because acting on a stale "not yet run" is exactly
+> how the reranker got blamed the first time.
+
 **The decisive test has still not been run.** It requires uvicorn, started
 without `--reload`, on the now-quiet box, reading the real `[timing:chat]` line
 — see "Reproducing" below. `diag_latency.py` is not a substitute for it; it was
@@ -295,6 +301,56 @@ Consequences for the "first token <3s" target:
   and independent. Fixing the box will not fix a 429 cascade, and fixing the
   gateway will not fix 1,848ms of string formatting.
 
+## 2026-09-02 — the decisive test, found in the logs
+
+**It was run on 2026-08-18 at 16:44, hours after this document declared it "still
+not run", and nobody folded the result back in.** `logs/uvicorn_test1.log` is a
+real uvicorn server on port 8001 with **no reloader** (`--reload` prints
+`Started reloader process ... WatchFiles`; that line is absent) and it carries
+four genuine `[timing:chat]` / `[timing:chat_stream]` lines.
+
+| When | idle before | session_history | embedding | retrieval | hydration | context_build |
+|---|---:|---:|---:|---:|---:|---:|
+| 08-18 20:57:29 | 253 min | 4,595ms | 5,028ms | 5,048ms | 557ms | 27ms |
+| 08-19 12:21:17 | 924 min | 2,096ms | 4,538ms | 5,671ms | 276ms | 9ms |
+| 08-19 12:22:44 | **1.4 min** | 764ms | **88ms** | **1,142ms** | 196ms | 7ms |
+| 08-19 12:24:25 | **1.7 min** | **117ms** | **102ms** | 4,911ms | 26ms | 0ms |
+
+**`--reload` is refuted.** The server had no reloader and still produced
+`embedding=5,028ms` and `session_history=4,595ms` — the same class of stall this
+document catalogues. The leading suspect from the section above is dead.
+
+**What the four rows actually track is idle time, not concurrency or config.**
+The two requests that followed a long idle gap (253 min, 924 min) show embedding
+at 4.5-5.0s; the two that arrived 1-2 minutes behind another request show it at
+88ms and 102ms — a **50x** difference on identical work in one warm process, with
+the fast pair sandwiched between the slow ones so ordering and warmup cannot
+explain it. That is the signature of the process being **paged out while idle**
+and faulted back in on the next request.
+
+**This promotes memory pressure / paging back to leading candidate** — the
+opposite of what the 2026-08-18 in-process run concluded. It also explains why
+that run saw nothing: `diag_latency.py` fires its requests back-to-back, so the
+process never sits idle long enough to be evicted. The harness could not have
+reproduced this bug.
+
+Consistent with it: `retrieval=4,911ms` in the last row while `embedding=102ms`
+and `context_build=0ms`. Under the paging story the residency of *one* stage's
+pages need not match another's; under a CPU-contention story every stage in the
+same request should degrade together, and here they plainly do not.
+
+**Still not established:** the paging hypothesis is now well supported but not
+directly confirmed — no one has watched this process's working set across an idle
+gap. That measurement (working set immediately before and after a post-idle
+request, plus system commit vs physical) is the remaining step, and it is
+cheap. Until then, treat "idle-time paging" as the best explanation rather than a
+finding.
+
+**Consequence for the reranker, unchanged and now firmer:** the stalls hit
+`session_history` and `embedding` — a Postgres SELECT and a 384-dim encode —
+just as hard as they hit rerank. Nothing here is a cross-encoder problem, and
+Phase 2 (ONNX / 2-layer model) still should not proceed as a latency fix.
+
 
 
 The evidence establishes *that* the host stalls the whole process. It does not
@@ -309,11 +365,10 @@ yet establish *why*. Candidates, and how to tell them apart:
   count and working set, and total committed memory vs physical.
 - **CPU contention from another process** (Defender scan, Search Indexer,
   Windows Update). **Test:** sample CPU by process during a slow request.
-- **`--reload`.** `README.md:151` documents the start command with `--reload`,
-  and every in-process measurement above was taken without it. `watchfiles`
-  polling a tree that includes `.venv` and the `data/chroma/*.bin` files that
-  mutate during normal operation would burn cores continuously. **Test:** the
-  live request below against a server started without `--reload`.
+- **`--reload`.** ~~`README.md:151` documents the start command with `--reload`,
+  and every in-process measurement above was taken without it.~~ **REFUTED
+  2026-09-02** — `logs/uvicorn_test1.log` is a no-reloader server that stalled
+  anyway (see the 2026-09-02 section). Kept only so it is not re-proposed.
 - **Thermal throttling / disk near full.** Least likely to produce 1,495x
   spreads on a single SELECT, but cheap to check.
 
@@ -368,7 +423,7 @@ round-trips; the weights themselves load from cache in under a second. Beyond
 the ~2 minutes, this is a **production availability risk**: the app currently
 cannot boot if huggingface.co is unreachable.
 
-## Two open correctness items
+## Two open correctness items — both CLOSED 2026-09-02
 
 1. **`score_multi` is not numerically identical to the sequential path it
    replaced.** `_verify_score_multi.py` measured max abs difference **2.527e-01**
@@ -376,8 +431,71 @@ cannot boot if huggingface.co is unreachable.
    activation scales per batch, so 16-scored-together != 8+8-scored-separately.
    Not cosmetic: `rerank_min_score=-8.0` is an **absolute** comparison on these
    logits and is what declines off-topic questions, so a 0.25 drift can flip a
-   decline. **The fp32 control run has not been done** — if fp32 is identical the
-   drift is a pure quantization artefact and the fix is to settle the int8 flag;
-   if fp32 also drifts, the reshape is wrong.
+   decline. ~~**The fp32 control run has not been done**~~ — **DONE 2026-09-02,
+   and it clears the reshape:**
+
+   | Config | max abs difference | verdict |
+   |---|---:|---|
+   | `RERANK_QUANTIZE=false` (fp32) | **9.537e-07** | PASS — batching is exact |
+   | `RERANK_QUANTIZE=true` (int8) | **2.527e-01** | drift is the quantization |
+
+   So the reshape in `score_multi` is **correct** and the drift is a pure int8
+   artefact, exactly as hypothesised. The fix was therefore to settle the flag,
+   not to touch the code.
+
 2. **Batching earns 0.96x**, so it currently carries item 1's risk for no speed.
-   Keep it only if the fp32 control clears it.
+   ~~Keep it only if the fp32 control clears it.~~ **The control cleared it, and
+   the re-measured speedup is better than 0.96x:** 1.01x in fp32 (785.7ms →
+   781.4ms) and **1.18x** in int8 (370.6ms → 314.8ms), 16 pairs, best of 3. With
+   the reshape proven exact in fp32, batching carries no correctness risk and is
+   kept.
+
+## The int8 flag: measured unsafe against the gate, 2026-09-02
+
+The fp32 control above says the *code* is right. It says nothing about whether
+the int8 drift can reach the decision boundary, which is the question that
+actually affects students. `scripts/_verify_gate_margin.py` measures that
+directly — for all 56 eval queries it scores the real shortlist in both
+precisions and reports each query's distance from `rerank_min_score=-8.0`:
+
+```
+queries scored              56
+worst int8 drift observed   1.223
+smallest gate margin        0.333   ("moddle login")
+gate verdict flips          0
+safety ratio                0.3x     -> FAIL
+```
+
+**Zero verdicts flipped, and that is not reassuring.** The worst drift (1.223) is
+**3.7x larger than the smallest margin** (0.333). `moddle login` sits a third of
+a logit from being declined while quantization moves scores by over a full logit;
+no verdict flipped on *these* queries, but nothing prevents a slightly different
+phrasing from landing on the wrong side. A no-regression pass with less margin
+than drift is luck, not a property.
+
+`bench_quality.py` agrees the two precisions are otherwise indistinguishable —
+`bench_q_fp32_sep02.json` vs `bench_q_int8_sep02.json` differ by **+0.000 on
+every** recall, precision, confidence and stability metric, with int8 ~300ms
+faster on mean latency. That is precisely why the margin test was needed: an
+eval-set comparison cannot see a risk that has not yet materialised on the eval
+set.
+
+**Conclusion: `RERANK_QUANTIZE=false`.** The flag buys ~1.18x on a stage that is
+a fraction of a request dominated by ~1s of NVIDIA generation, and in exchange it
+puts a >1-logit perturbation next to a 0.333-logit margin on the one mechanism
+that can silently refuse a legitimate student question. Note `config.py:476`
+already defaults it to `False` with the comment "stays off until the full eval
+set confirms no recall regression" — the eval set confirms no regression, but the
+gate margin does not confirm safety, so the default stands.
+
+**Caveat on the harness:** `_verify_gate_margin.py`'s flip *detector* has not
+been falsified — no run has been produced in which it reports a flip, so "0
+flips" is measured but the detector is unproven. The margin and drift figures do
+not depend on it.
+
+```bash
+# Both checks, in the order they should be read:
+RERANK_QUANTIZE=false ./.venv/Scripts/python.exe -u scripts/_verify_score_multi.py  # reshape exact?
+./.venv/Scripts/python.exe -u scripts/_verify_gate_margin.py                        # drift vs gate margin
+```
+

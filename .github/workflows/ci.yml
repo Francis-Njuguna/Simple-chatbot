@@ -8,6 +8,34 @@ on:
 jobs:
   tests:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    # The 6 pool tests in tests/test_db_connection_lifecycle.py skip themselves
+    # when PostgreSQL is unreachable, so without a database CI silently ran 67 of
+    # 73 offline tests and still reported green. These settings mirror the
+    # postgres service in docker-compose.yml so the same URL resolves in CI.
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: amref
+          POSTGRES_PASSWORD: amref_secret
+          POSTGRES_DB: amref_helpdesk
+        ports:
+          - 5433:5432
+        options: >-
+          --health-cmd "pg_isready -U amref -d amref_helpdesk"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      POSTGRES_HOST: localhost
+      POSTGRES_PORT: 5433
+      POSTGRES_USER: amref
+      POSTGRES_PASSWORD: amref_secret
+      POSTGRES_DB: amref_helpdesk
+
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -15,7 +43,27 @@ jobs:
           python-version: "3.11"
       - run: python -m pip install --upgrade pip
       - run: pip install -e ".[dev]"
-      - run: pytest -m "not live" -q
+
+      # The pool tests INSERT real chat rows, so the schema must exist. Alembic
+      # owns schema in this project (never create_all) — see
+      # backend/app/database/session.py. This doubles as the reachability gate:
+      # a migration cannot connect to a database that isn't there, so a broken
+      # service container fails here in seconds rather than 95s into pytest.
+      - name: Apply database migrations
+        run: alembic upgrade head
+
+      - name: Run offline test suite
+        # -rs lists skip reasons in the log. The suite is expected to run 73/73
+        # offline tests in CI; a skip means an environment gap, which is exactly
+        # the failure mode this job was blind to before. Checked from this single
+        # run rather than a second pytest invocation, so CI time is not doubled.
+        run: |
+          set -o pipefail
+          pytest -m "not live" -q -rs 2>&1 | tee pytest-offline.log
+          if grep -qE "^SKIPPED" pytest-offline.log; then
+            echo "::error title=Tests skipped in CI::A test skipped instead of running. CI must execute the full offline suite; see the SKIPPED lines above."
+            exit 1
+          fi
 
   nvidia-live:
     if: ${{ github.event_name != 'pull_request' }}
@@ -35,5 +83,13 @@ jobs:
           NVIDIA_BASE_URL: https://integrate.api.nvidia.com/v1
           NVIDIA_MODEL: meta/llama-3.1-8b-instruct
         run: |
-          test -n "$NVIDIA_API_KEY" || { echo "NVIDIA_API_KEY secret is required"; exit 1; }
+          # A missing secret means "this fork/clone cannot reach NVIDIA", not
+          # "the code is broken". Exiting 1 here painted every push red for
+          # anyone without the credential, which trains people to ignore CI.
+          # The unit job above still gates correctness; this job only adds live
+          # provider coverage, so skipping is the honest outcome.
+          if [ -z "$NVIDIA_API_KEY" ]; then
+            echo "::warning title=NVIDIA live test skipped::NVIDIA_API_KEY secret is not set, so the live provider test did not run. Add the repository secret to enable it."
+            exit 0
+          fi
           pytest -m live tests/test_nvidia_provider.py -q

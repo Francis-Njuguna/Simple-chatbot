@@ -11,6 +11,11 @@ dependencies = [
     "sqlalchemy[asyncio]>=2.0.36",
     "asyncpg>=0.30.0",
     "alembic>=1.14.0",
+    # Sync driver for Alembic: alembic/env.py resolves the URL through
+    # Settings.sync_database_url, which is a psycopg2 dialect. Present in local
+    # venvs only because it was installed by hand — nothing declared it, so
+    # `alembic upgrade head` failed on any clean install (including CI).
+    "psycopg2-binary>=2.9.9",
     # Vector store
     "chromadb>=0.5.23",
     # LangChain core

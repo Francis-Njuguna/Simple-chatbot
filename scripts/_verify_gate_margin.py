@@ -36,11 +36,11 @@ from pathlib import Path
 os.environ.setdefault("KMP_DUPLICATE_LIB_OK", "TRUE")
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-import torch  # noqa: E402
+import torch
 
-from backend.app.config import Settings  # noqa: E402
-from backend.app.rag.reranker import CrossEncoderReranker  # noqa: E402
-from scripts.eval_set import EVAL_QUERIES  # noqa: E402
+from backend.app.config import Settings
+from backend.app.rag.reranker import CrossEncoderReranker
+from scripts.eval_set import EVAL_QUERIES
 
 
 def _load_kb_chunks() -> list[str]:

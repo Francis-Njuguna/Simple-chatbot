@@ -119,6 +119,9 @@ class Settings(BaseSettings):
     # 2048 (not 1024): the synthesis prompt asks for a complete numbered
     # procedure plus caveats, which 1024 tokens truncates mid-answer.
     llm_max_tokens: int = Field(default=2048, alias="LLM_MAX_TOKENS")
+    llm_prompt_profile: Literal["legacy", "compact"] = Field(
+        default="compact", alias="LLM_PROMPT_PROFILE"
+    )
 
     # ---------------- LLM failure budget ----------------
     # These settings MULTIPLY. Read the arithmetic before changing one, because
