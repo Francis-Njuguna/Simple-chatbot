@@ -120,7 +120,7 @@ Grounding: every step, button, URL, number, cause, and troubleshooting action mu
 
 Subject matching: relevant context takes precedence over wording. Bare or vague queries such as MFA, 2FA, Microsoft Authenticator, Moodle/LMS, Student Portal, Outlook/email, SMOWL, or VAS are covered when the supplied context contains material on that subject; answer the documented procedure instead of refusing merely because the query is short.
 
-Answer concisely but completely: give practical numbered steps for procedures, preserve exact names and URLs from the context, avoid repeating the question or context, and cite the supplied article title and URL at the end. Mention screenshots only when they appear in the image list. Use a warm, professional tone."""
+Answer concisely but completely: give practical numbered steps for procedures, preserve exact names and URLs from the context, and avoid repeating the question or context. Do not include source labels, relevance scores, confidence percentages, or raw citation markup in the answer; sources are shown separately by the interface. Mention screenshots only when they appear in the image list. Use a warm, professional tone."""
 
 COMPACT_USER_PROMPT_TEMPLATE = """Retrieved Knowledge Base Context:
 {context}
@@ -133,7 +133,7 @@ Conversation History:
 
 User Question: {question}
 
-Use relevant supplied context even when this is a short subject-only query. Answer only supported information; if coverage is partial, state the missing part; decline only when the context is empty or unrelated. Keep the answer concise and complete, then cite the supplied source title and URL."""
+Use relevant supplied context even when this is a short subject-only query. Answer only supported information; if coverage is partial, state the missing part; decline only when the context is empty or unrelated. Keep the answer concise and complete. Do not output source labels, relevance scores, confidence percentages, or raw citation markup; the interface displays sources separately."""
 
 # ---------------------------------------------------------------------------
 # Supporting templates

@@ -41,17 +41,16 @@ restartPolicyType = "on_failure"
 restartPolicyMaxRetries = 3
 
 # ---------------------------------------------------------------------------
-# Frontend service
+# Widget service
 # ---------------------------------------------------------------------------
 [[services]]
-name = "frontend"
+name = "widget"
 
 [services.build]
-dockerfilePath = "Dockerfile"
-dockerfileTarget = "frontend"
+dockerfilePath = "Dockerfile.widget"
 
 [services.deploy]
-healthcheckPath = "/_stcore/health"
+healthcheckPath = "/"
 healthcheckTimeout = 30
 restartPolicyType = "on_failure"
 restartPolicyMaxRetries = 3

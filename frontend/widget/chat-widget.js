@@ -20,8 +20,8 @@
  * readable response body — the KB's own articles still tell students to use
  * Internet Explorer, so that path has to keep working.
  *
- * Conversation continuity uses the same session_id contract as the Streamlit
- * frontend: the first /chat response returns a session_id which is echoed
+ * Conversation continuity uses the backend session_id contract: the first
+ * /chat response returns a session_id which is echoed
  * back on every subsequent request (persisted in sessionStorage per tab).
  *
  * No dependencies. All DOM classes are prefixed `acw-`.
@@ -37,7 +37,7 @@
     (scriptEl && scriptEl.getAttribute("data-api-base")) ||
     "http://localhost:8000/api/v1";
   API_BASE = API_BASE.replace(/\/+$/, "");
-  // Backend root (for resolving /static image paths), same logic as Streamlit.
+  // Backend root for resolving /static image paths.
   var BACKEND_URL =
     (scriptEl && scriptEl.getAttribute("data-backend-url")) ||
     API_BASE.replace(/\/api\/v1$/, "");
@@ -65,7 +65,7 @@
   })();
 
   // ------------------------------------------------------------------
-  // State (mirrors Streamlit's session_state)
+  // Widget state
   // ------------------------------------------------------------------
   var state = {
     sessionId: null,
@@ -140,7 +140,7 @@
   }
 
   // ------------------------------------------------------------------
-  // API calls (same endpoints/payloads as the Streamlit frontend)
+  // API calls to the FastAPI backend
   // ------------------------------------------------------------------
   function fetchCategories() {
     return fetch(API_BASE + "/categories")
@@ -300,7 +300,7 @@
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ message_id: messageId, rating: rating }),
     }).catch(function () {
-      /* feedback is best-effort, same as Streamlit */
+      /* feedback is best-effort */
     });
   }
 
@@ -401,14 +401,6 @@
    */
   function renderMetaBlock(response, includeFeedback) {
     var meta = el("div", "acw-meta");
-
-    // Confidence badge
-    var confidence = response.confidence || 0;
-    if (confidence) {
-      meta.appendChild(
-        el("span", "acw-confidence", "Confidence: " + Math.round(confidence * 100) + "%")
-      );
-    }
 
     // Images
     var images = response.images || [];

@@ -1,5 +1,5 @@
 # Lightweight static server for the embeddable chat widget only.
-# Does not touch the backend, Streamlit frontend, or their Dockerfiles.
+# Serves only the standalone widget assets; the FastAPI backend is separate.
 FROM nginx:alpine
 
 # Minimal nginx config template: correct Content-Type for .js + permissive

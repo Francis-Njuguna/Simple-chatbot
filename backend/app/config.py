@@ -41,7 +41,6 @@ class Settings(BaseSettings):
 
     host: str = Field(default="0.0.0.0", alias="HOST")
     port: int = Field(default=8000, alias="PORT")
-    streamlit_port: int = Field(default=8501, alias="STREAMLIT_PORT")
 
     secret_key: str = Field(default="change-me", alias="SECRET_KEY")
     jwt_algorithm: str = Field(default="HS256", alias="JWT_ALGORITHM")
@@ -58,7 +57,7 @@ class Settings(BaseSettings):
     llm_max_concurrency: int = Field(default=1, alias="LLM_MAX_CONCURRENCY")
     llm_queue_timeout: float = Field(default=60.0, alias="LLM_QUEUE_TIMEOUT")
     cors_origins: str = Field(
-        default="http://localhost:8501,http://localhost:8080,http://127.0.0.1:8501,http://127.0.0.1:8080",
+        default="http://localhost:8501,http://localhost:8088,http://127.0.0.1:8501,http://127.0.0.1:8000",
         alias="CORS_ORIGINS",
     )
     cors_allow_credentials: bool = Field(default=True, alias="CORS_ALLOW_CREDENTIALS")

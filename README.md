@@ -12,14 +12,14 @@ Production-ready Retrieval-Augmented Generation (RAG) chatbot for **Amref Intern
 - Conversation memory with PostgreSQL session history
 - JWT authentication, rate limiting, feedback system, analytics logging
 - NVIDIA NIM (`meta/llama-3.1-8b-instruct`) through its OpenAI-compatible API
-- Streamlit chat UI with dark mode, categories filter, and search history
+- Standalone embeddable chat widget
 - Docker Compose deployment
 
 ## Architecture
 
 ```
 ┌─────────────────┐     ┌──────────────────┐     ┌─────────────┐
-│  Streamlit UI   │────▶│  FastAPI Backend │────▶│ PostgreSQL  │
+│  Chat Widget    │────▶│  FastAPI Backend │────▶│ PostgreSQL  │
 │  (frontend/)    │     │  (backend/app/)  │     │ (metadata)  │
 └─────────────────┘     └────────┬─────────┘     └─────────────┘
                                  │
@@ -51,7 +51,7 @@ backend/app/
 | Component | Technology |
 |-----------|------------|
 | Backend | FastAPI (async) |
-| Frontend | Streamlit |
+| Frontend | Static HTML/CSS/JavaScript widget served by Nginx |
 | Database | PostgreSQL |
 | Vector DB | ChromaDB |
 | LLM Framework | LangChain |
@@ -149,12 +149,13 @@ Re-run ingestion to index local images.
 ```bash
 # Backend
 uv run uvicorn backend.app.main:app --reload --host 0.0.0.0 --port 8000
-# Frontend
-uv run streamlit run frontend/streamlit_app.py --server.port 8501
+# Widget (local static server)
+cd frontend/widget
+python -m http.server 8501
 ```
 
 - API docs: http://localhost:8000/docs
-- Chat UI: http://localhost:8501
+- Widget test page: http://localhost:8501/index.html
 
 ### Docker Compose (full stack)
 
@@ -164,7 +165,7 @@ docker compose up --build
 
 Services:
 - Backend: http://localhost:8000
-- Streamlit: http://localhost:8501
+- Widget: http://localhost:8501
 - PostgreSQL: localhost:5432
 
 ## API Endpoints
