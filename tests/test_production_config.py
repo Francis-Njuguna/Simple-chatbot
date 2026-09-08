@@ -10,7 +10,7 @@ def _production_settings(**overrides) -> Settings:
         "LLM_PROVIDER": "openai",
         "OPENAI_API_KEY": "test-key-not-real",
         "OPENAI_API_BASE": "https://integrate.api.nvidia.com/v1",
-        "OPENAI_MODEL": "meta/llama-3.1-8b-instruct",
+        "OPENAI_MODEL": "nvidia/nemotron-3-super-120b-a12b",
         **overrides,
     }
     return Settings(**values)
@@ -41,7 +41,7 @@ def test_defaults_select_nvidia_with_a_five_per_minute_chat_budget() -> None:
     settings = Settings(_env_file=None)
     assert settings.llm_provider == "openai"
     assert settings.openai_api_base == "https://integrate.api.nvidia.com/v1"
-    assert settings.openai_model == "meta/llama-3.1-8b-instruct"
+    assert settings.openai_model == "nvidia/nemotron-3-super-120b-a12b"
     assert settings.chat_rate_limit == "5/minute"
 
 

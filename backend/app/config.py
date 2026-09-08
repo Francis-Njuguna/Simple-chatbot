@@ -192,7 +192,7 @@ class Settings(BaseSettings):
         validation_alias=AliasChoices("OPENAI_API_KEY", "NVIDIA_API_KEY"),
     )
     openai_model: str = Field(
-        default="meta/llama-3.1-8b-instruct", alias="OPENAI_MODEL"
+        default="nvidia/nemotron-3-super-120b-a12b", alias="OPENAI_MODEL"
     )
     # Optional API base for OpenAI-compatible endpoints (e.g. Qwen providers,
     # local Ollama OpenAI-compatible servers). When set, the runtime will target

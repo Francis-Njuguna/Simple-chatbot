@@ -40,7 +40,7 @@ async def test_live_nvidia_generates_a_grounded_answer() -> None:
             "NVIDIA_BASE_URL", "https://integrate.api.nvidia.com/v1"
         ),
         OPENAI_MODEL=os.getenv(
-            "NVIDIA_MODEL", "meta/llama-3.1-8b-instruct"
+            "NVIDIA_MODEL", "nvidia/nemotron-3-super-120b-a12b"
         ),
         LLM_TIMEOUT=45,
         LLM_MAX_RETRIES=1,

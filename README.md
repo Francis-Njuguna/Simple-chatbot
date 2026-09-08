@@ -11,7 +11,7 @@ Production-ready Retrieval-Augmented Generation (RAG) chatbot for **Amref Intern
 - Source citations with article title, URL, and confidence scores
 - Conversation memory with PostgreSQL session history
 - JWT authentication, rate limiting, feedback system, analytics logging
-- NVIDIA NIM (`meta/llama-3.1-8b-instruct`) through its OpenAI-compatible API
+- NVIDIA NIM (`nvidia/nemotron-3-super-120b-a12b`) through its OpenAI-compatible API
 - Standalone embeddable chat widget
 - Docker Compose deployment
 
@@ -56,7 +56,7 @@ backend/app/
 | Vector DB | ChromaDB |
 | LLM Framework | LangChain |
 | Embeddings | sentence-transformers/all-MiniLM-L6-v2 |
-| LLM | NVIDIA NIM (`meta/llama-3.1-8b-instruct`) |
+| LLM | NVIDIA NIM (`nvidia/nemotron-3-super-120b-a12b`) |
 | Package Manager | uv |
 
 ## Prerequisites
@@ -214,7 +214,7 @@ Key environment variables (see `.env.example`):
 | Variable | Description | Default |
 |----------|-------------|---------|
 | `LLM_PROVIDER` | NVIDIA's OpenAI-compatible provider (`openai`) | `openai` |
-| `OPENAI_MODEL` | NVIDIA NIM model name | `meta/llama-3.1-8b-instruct` |
+| `OPENAI_MODEL` | NVIDIA NIM model name | `nvidia/nemotron-3-super-120b-a12b` |
 | `OPENAI_API_BASE` | NVIDIA NIM OpenAI-compatible base URL | `https://integrate.api.nvidia.com/v1` |
 | `OPENAI_API_KEY` | NVIDIA API key, supplied via deployment secret | required |
 | `OLLAMA_BASE_URL` | Local Ollama server URL | `http://localhost:11434` |
