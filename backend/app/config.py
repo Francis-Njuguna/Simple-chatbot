@@ -41,7 +41,6 @@ class Settings(BaseSettings):
 
     host: str = Field(default="0.0.0.0", alias="HOST")
     port: int = Field(default=8000, alias="PORT")
-    streamlit_port: int = Field(default=8501, alias="STREAMLIT_PORT")
 
     secret_key: str = Field(default="change-me", alias="SECRET_KEY")
     jwt_algorithm: str = Field(default="HS256", alias="JWT_ALGORITHM")
@@ -53,7 +52,15 @@ class Settings(BaseSettings):
     # concurrency level above it measures the rate limiter rather than the
     # server's actual capacity. Read once at route-import time (slowapi's
     # decorator takes a literal), so changing it needs a server restart.
-    chat_rate_limit: str = Field(default="20/minute", alias="CHAT_RATE_LIMIT")
+    chat_rate_limit: str = Field(default="5/minute", alias="CHAT_RATE_LIMIT")
+
+    llm_max_concurrency: int = Field(default=1, alias="LLM_MAX_CONCURRENCY")
+    llm_queue_timeout: float = Field(default=60.0, alias="LLM_QUEUE_TIMEOUT")
+    cors_origins: str = Field(
+        default="http://localhost:8501,http://localhost:8088,http://127.0.0.1:8501,http://127.0.0.1:8000",
+        alias="CORS_ORIGINS",
+    )
+    cors_allow_credentials: bool = Field(default=True, alias="CORS_ALLOW_CREDENTIALS")
 
     # ------------------------------------------------------------------
     # PostgreSQL — individual credential components
@@ -97,11 +104,12 @@ class Settings(BaseSettings):
     chroma_persist_dir: str = Field(default="./data/chroma", alias="CHROMA_PERSIST_DIR")
 
     # ------------------------------------------------------------------
-    # LLM — OpenAI-compatible (primary), AgentRouter, Gemini, Anthropic, Ollama
+    # LLM — NVIDIA NIM through its OpenAI-compatible API is production primary.
+    # Other provider branches remain available for diagnostics/legacy deployments.
     # Provider options: "openai" | "agentrouter" | "gemini" | "anthropic" | "ollama"
     # ------------------------------------------------------------------
     llm_provider: Literal["openai", "agentrouter", "gemini", "anthropic", "ollama"] = Field(
-        default="gemini", alias="LLM_PROVIDER"
+        default="openai", alias="LLM_PROVIDER"
     )
 
     # LLM runtime knobs (previously missing) — critical for stable builds.
@@ -110,8 +118,61 @@ class Settings(BaseSettings):
     # 2048 (not 1024): the synthesis prompt asks for a complete numbered
     # procedure plus caveats, which 1024 tokens truncates mid-answer.
     llm_max_tokens: int = Field(default=2048, alias="LLM_MAX_TOKENS")
-    llm_timeout: int = Field(default=30, alias="LLM_TIMEOUT")
-    llm_max_retries: int = Field(default=2, alias="LLM_MAX_RETRIES")
+    llm_prompt_profile: Literal["legacy", "compact"] = Field(
+        default="compact", alias="LLM_PROMPT_PROFILE"
+    )
+
+    # ---------------- LLM failure budget ----------------
+    # These settings MULTIPLY. Read the arithmetic before changing one, because
+    # the product — not any single value — is what a student sits through when
+    # the gateway misbehaves:
+    #
+    #     transport worst case  =  llm_timeout x (1 + llm_max_retries) + backoff
+    #
+    # The previous defaults were 30 and 2, i.e. 30 x 3 + ~1.2 = ~91s. Nobody
+    # chose 91s; it was the product of two numbers that each looked reasonable
+    # alone. Measured on 2026-08-12 (logs/app.log, requests 44dc0992d827,
+    # f46c5ed2ed9c, a1837ba48b96): every attempt to agentrouter.org burned the
+    # full 30s without a response, so all three spent 90.9-95.6s in the LLM
+    # stage and two of them then showed the student an error message.
+    #
+    # Note what is NOT the problem: the retry *sleeps*. Every logged backoff is
+    # 0.37-0.99s (`Retrying request to /chat/completions in 0.42 seconds`), so
+    # Retry-After is never sent by this gateway and honouring it would change
+    # nothing. The cost is entirely the per-attempt timeout, times the attempts.
+    #
+    # 25, not lower: the one attempt that did succeed took ~22s (09:03:15 ->
+    # 09:03:37). A timeout under ~25s converts that success into a failure.
+    llm_timeout: int = Field(default=25, alias="LLM_TIMEOUT")
+    # 1, not 2: retries genuinely rescue requests here — 44dc0992d827 succeeded
+    # on its third attempt — but each costs a whole llm_timeout, so a third
+    # attempt buys a little success rate at +25s on every failure.
+    llm_max_retries: int = Field(default=1, alias="LLM_MAX_RETRIES")
+    # Split out from llm_timeout because connecting and generating fail on
+    # wildly different timescales: TCP+TLS to a reachable host is well under a
+    # second, so an unreachable gateway should be reported in ~5s instead of
+    # spending the generation budget on it. A scalar timeout cannot say that.
+    # Only takes effect where the provider is handed an explicit httpx client
+    # (AgentRouter — see rag.sse_repair).
+    llm_connect_timeout: float = Field(default=5.0, alias="LLM_CONNECT_TIMEOUT")
+    # Hard ceiling on time-to-first-*visible*-token for /chat/stream, enforced
+    # in rag.llm.stream_answer. This is the only bound that does not multiply by
+    # the attempt count, which is what makes it the effective one: the SDK runs
+    # its whole retry loop inside the first __anext__, so this deadline cuts a
+    # cascade short wherever it has got to. 0 disables it.
+    llm_first_token_timeout: float = Field(
+        default=30.0, alias="LLM_FIRST_TOKEN_TIMEOUT"
+    )
+    # Guards a stream that connects and then goes quiet mid-answer.
+    # langchain_openai's own knob (stream_chunk_timeout) defaults to 120s, far
+    # too long to leave a half-written answer on screen. It measures the gap
+    # between *parsed* chunks, so a reasoning model's content-free
+    # reasoning_content deltas keep it alive and it fires only on real silence.
+    # Applied after the request succeeds, so it is not retried and does not
+    # multiply. 0 disables it.
+    llm_stream_stall_timeout: float = Field(
+        default=30.0, alias="LLM_STREAM_STALL_TIMEOUT"
+    )
 
     # HTTP connection pool for the LLM client. These only take effect where the
     # provider is given an explicit httpx client (AgentRouter, which needs one
@@ -125,14 +186,21 @@ class Settings(BaseSettings):
         default=100, alias="LLM_MAX_KEEPALIVE_CONNECTIONS"
     )
 
-    # OpenAI-compatible provider (default)
-    openai_api_key: str = Field(default="", alias="OPENAI_API_KEY")
-    openai_model: str = Field(default="gpt-4o", alias="OPENAI_MODEL")
+    # NVIDIA/OpenAI-compatible provider (production default)
+    openai_api_key: str = Field(
+        default="",
+        validation_alias=AliasChoices("OPENAI_API_KEY", "NVIDIA_API_KEY"),
+    )
+    openai_model: str = Field(
+        default="nvidia/nemotron-3-super-120b-a12b", alias="OPENAI_MODEL"
+    )
     # Optional API base for OpenAI-compatible endpoints (e.g. Qwen providers,
     # local Ollama OpenAI-compatible servers). When set, the runtime will target
     # this base URL instead of api.openai.com. If the local endpoint is unauthenticated,
     # OPENAI_API_KEY may be omitted and a dummy key is used for compatibility.
-    openai_api_base: str | None = Field(default=None, alias="OPENAI_API_BASE")
+    openai_api_base: str | None = Field(
+        default="https://integrate.api.nvidia.com/v1", alias="OPENAI_API_BASE"
+    )
 
     # ------------------------------------------------------------------
     # AgentRouter — Anthropic Claude models via an OpenAI-compatible endpoint
@@ -334,17 +402,60 @@ class Settings(BaseSettings):
     # latency (the shortlist gates that).
     retrieval_candidate_pool: int = Field(default=40, alias="RETRIEVAL_CANDIDATE_POOL")
     # How many fused candidates go to the (more expensive) cross-encoder.
-    # 16 (was 12): a wider pool is pointless if the shortlist re-narrows it
-    # before the cross-encoder — which is the only stage that can tell a
-    # genuine answer from a vocabulary match — but this is the stage that costs
-    # real milliseconds, so it grows more conservatively than the pool.
+    # This is the stage that costs real milliseconds: pairs scored is
+    # rerank_shortlist x rerank_query_forms, and a pair is 123-166ms on a 4-core
+    # CPU box, so this number multiplied by the form count IS retrieval latency.
+    #
+    # 8 (was 16, was 12). The widening to 16 was reasoned from "a wider pool is
+    # pointless if the shortlist re-narrows it", but the 56-query eval set does
+    # not support paying for it: at 8 the recalls are covered 1.000, synonym
+    # 1.000, typo 1.000, partial 0.667 with off-topic precision 1.000 — every
+    # figure identical to the 16 baseline (bench_q_shortlist8.json vs
+    # bench_quality_baseline.json) for half the cross-encoder work.
+    #
+    # If you need to recover recall, spend it here rather than on
+    # rerank_query_forms, which measurably cannot be cut (see that setting).
     #
     # Named MMR_SHORTLIST historically, when MMR chose these. It is now a plain
     # top-N cut of the fused RRF ranking; the env alias is kept so existing
     # deployments do not silently fall back to the default.
     rerank_shortlist: int = Field(
-        default=16, validation_alias=AliasChoices("RERANK_SHORTLIST", "MMR_SHORTLIST")
+        default=8, validation_alias=AliasChoices("RERANK_SHORTLIST", "MMR_SHORTLIST")
     )
+
+    # ------------------------------------------------------------------
+    # torch CPU threads
+    #
+    # Process-wide, applied once at startup (see main.py lifespan). It governs
+    # every torch op in the process — the embedder and the cross-encoder both.
+    #
+    # This knob is a genuine trade-off, not a free win, and the right value
+    # depends on which one you are optimising:
+    #
+    #   LATENCY (one request at a time). More threads is better. Measured on a
+    #   4-core box, 32 pairs of ms-marco-MiniLM-L-6-v2, fp32:
+    #       1 thread          5312ms
+    #       2 threads (torch default on 4 cores)
+    #                         4987ms
+    #       4 threads         3933ms            <- 1.27x over the default
+    #
+    #   CAVEAT on those three numbers: they were measured COLD, so each includes
+    #   one-off graph setup. Warm, the same 32 pairs take ~0.6-0.7s (18-26ms per
+    #   pair), so treat the ratio as indicative and the absolutes as junk. The
+    #   ordering has not been re-measured warm; if you need to defend this
+    #   default, re-run it warm rather than citing the table above.
+    #
+    #   THROUGHPUT (many concurrent requests). Fewer threads is better. With N
+    #   requests each spawning 4 threads on 4 cores the process oversubscribes
+    #   and every request slows down; OPTIMIZATION_REPORT.md recommends 1 thread
+    #   for exactly this reason and measures it as the top fix at 50 users.
+    #
+    # You cannot have both on a fixed core count. The default here is 4 because
+    # the current goal is first-token latency for a small student cohort. Set
+    # TORCH_NUM_THREADS=1 if the deployment becomes concurrency-bound.
+    # 0 means "leave torch alone" (use its own default).
+    # ------------------------------------------------------------------
+    torch_num_threads: int = Field(default=4, ge=0, alias="TORCH_NUM_THREADS")
 
     # ------------------------------------------------------------------
     # Cross-encoder reranking
@@ -663,6 +774,10 @@ class Settings(BaseSettings):
         return (self.app_env or "").strip().lower() in {"production", "prod", "staging"}
 
     @property
+    def cors_origin_list(self) -> list[str]:
+        return [origin.strip() for origin in self.cors_origins.split(",") if origin.strip()]
+
+    @property
     def retrieval_debug_active(self) -> bool:
         """Whether to emit per-query retrieval diagnostics.
 
@@ -855,7 +970,14 @@ class Settings(BaseSettings):
 
         def _placeholder(value: str) -> bool:
             low = value.lower()
-            return "your-" in low or "-here" in low or "<" in low
+            return (
+                "your-" in low
+                or "-here" in low
+                or "replace-" in low
+                or "placeholder" in low
+                or "change-me" in low
+                or "<" in low
+            )
 
         if provider == "agentrouter":
             if not self.agentrouter_api_key:
@@ -878,12 +1000,17 @@ class Settings(BaseSettings):
             if not self.agentrouter_model:
                 problems.append("AGENTROUTER_MODEL is empty.")
         elif provider == "openai":
-            if not self.openai_api_key and not self.openai_api_base:
+            is_nvidia = "integrate.api.nvidia.com" in (self.openai_api_base or "")
+            if not self.openai_api_key and is_nvidia:
+                problems.append("OPENAI_API_KEY / NVIDIA_API_KEY is not set.")
+            elif not self.openai_api_key and not self.openai_api_base:
                 problems.append("OPENAI_API_KEY is not set.")
             elif self.openai_api_key and _placeholder(self.openai_api_key):
                 problems.append("OPENAI_API_KEY is still a placeholder value.")
             if self.openai_api_base and _placeholder(self.openai_api_base):
                 problems.append("OPENAI_API_BASE is still a placeholder value.")
+            if not self.openai_model or _placeholder(self.openai_model):
+                problems.append("OPENAI_MODEL is empty or still a placeholder value.")
         elif provider == "anthropic":
             if not self.anthropic_auth_key:
                 problems.append("ANTHROPIC_AUTH_KEY / ANTHROPIC_API_KEY is not set.")
@@ -901,6 +1028,40 @@ class Settings(BaseSettings):
 
         return problems
 
+    def validate_production_config(self) -> list[str]:
+        problems: list[str] = []
+        secret = (self.secret_key or "").strip()
+        if len(secret) < 32 or secret.lower() in {"change-me", "change-me-to-a-long-random-string"}:
+            problems.append("SECRET_KEY must be a long random production secret (at least 32 characters).")
+        if self.cors_allow_credentials and "*" in self.cors_origin_list:
+            problems.append("CORS_ORIGINS cannot contain '*' when CORS_ALLOW_CREDENTIALS=true.")
+        if any("<" in origin or ">" in origin for origin in self.cors_origin_list):
+            problems.append("CORS_ORIGINS still contains a deployment placeholder domain.")
+        if self.llm_max_concurrency < 1:
+            problems.append("LLM_MAX_CONCURRENCY must be at least 1.")
+        if self.llm_queue_timeout <= 0:
+            problems.append("LLM_QUEUE_TIMEOUT must be greater than zero in production.")
+        problems.extend(self.validate_llm_config())
+        return problems
+
+    @property
+    def llm_transport_worst_case_seconds(self) -> float:
+        """Longest one LLM call can spend in the HTTP layer before giving up.
+
+        Exposed so the number is *asserted* rather than emergent. The ~91s
+        cascade of 2026-08-12 was not a decision anyone made — it was
+        ``30 x (1 + 2)``, noticed only after students had waited through it.
+        Anything that changes ``llm_timeout`` or ``llm_max_retries`` moves this,
+        and ``log_llm_config`` prints it at startup so it cannot drift unseen.
+        """
+        attempts = 1 + max(0, self.llm_max_retries)
+        # openai._constants.INITIAL_RETRY_DELAY = 0.5, doubling per retry and
+        # capped at MAX_RETRY_DELAY = 8.0; see
+        # openai._base_client._calculate_retry_timeout. Jitter only ever reduces
+        # it (x0.75-1.0), so this is an upper bound.
+        backoff = sum(min(0.5 * 2**i, 8.0) for i in range(attempts - 1))
+        return self.llm_timeout * attempts + backoff
+
     def log_llm_config(self) -> None:
         """Print the active LLM provider and any configuration problems."""
         model = {
@@ -911,6 +1072,25 @@ class Settings(BaseSettings):
             "ollama": self.ollama_model,
         }.get(self.llm_provider, "?")
         print(f"[config] llm_provider → {self.llm_provider} (model: {model})")
+        worst = self.llm_transport_worst_case_seconds
+        first_token = self.llm_first_token_timeout
+        print(
+            f"[config] llm failure budget → {self.llm_timeout}s x "
+            f"{1 + max(0, self.llm_max_retries)} attempts = {worst:.0f}s transport "
+            f"worst case; first-token ceiling "
+            f"{f'{first_token:.0f}s' if first_token > 0 else 'DISABLED'}"
+        )
+        if first_token <= 0:
+            print(
+                "[config] WARNING: LLM_FIRST_TOKEN_TIMEOUT=0 — a streaming reply "
+                f"can now show nothing for the full {worst:.0f}s transport budget."
+            )
+        elif first_token > worst:
+            print(
+                f"[config] WARNING: LLM_FIRST_TOKEN_TIMEOUT={first_token:.0f}s "
+                f"exceeds the {worst:.0f}s transport budget, so it can never fire. "
+                "Lower it, or raise LLM_TIMEOUT/LLM_MAX_RETRIES deliberately."
+            )
         for problem in self.validate_llm_config():
             print(f"[config] WARNING: {problem}")
 

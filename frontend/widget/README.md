@@ -20,23 +20,21 @@ template (e.g. `footer.php`):
 That's it — a black floating button appears bottom-right; clicking it slides
 open a compact chat panel.
 
-### Alternative: load the widget from the deployed frontend service
+### Load from the deployed widget service
 
-The Docker images (root `Dockerfile` frontend stage, `Dockerfile.frontend`,
-and `frontend/Dockerfile`) copy this folder into Streamlit's `static/`
-directory and run with `--server.enableStaticServing true`, so once the
-frontend service is deployed (Railway/docker-compose) the widget is served
+The standalone `Dockerfile.widget` image serves these files directly, so once
+the widget service is deployed (Railway/docker-compose) the widget is served
 at:
 
 ```
-https://<frontend-domain>/app/static/chat-widget.js
+https://<widget-domain>/chat-widget.js
 ```
 
 So on Railway you can embed without hosting the files yourself:
 
 ```html
 <script
-  src="https://your-frontend.up.railway.app/app/static/chat-widget.js"
+  src="https://your-widget.up.railway.app/chat-widget.js"
   data-api-base="https://your-backend.up.railway.app/api/v1"
   defer></script>
 ```
@@ -54,7 +52,7 @@ So on Railway you can embed without hosting the files yourself:
 
 - `POST /api/v1/chat` — `{ message, session_id?, category? }`; the returned
   `session_id` is stored in `sessionStorage` and echoed on subsequent
-  requests (same conversation logic as the Streamlit frontend).
+  requests (same conversation logic as the standalone widget).
 - `GET /api/v1/categories` — populates the category filter dropdown.
 - `POST /api/v1/feedback` — `{ message_id, rating }` from the 1–5 star
   rating under each assistant answer.

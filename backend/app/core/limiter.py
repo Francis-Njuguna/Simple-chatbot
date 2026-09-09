@@ -20,7 +20,7 @@ In route handlers::
     from backend.app.core.limiter import limiter
 
     @router.post("/chat")
-    @limiter.limit("20/minute")
+    @limiter.limit("5/minute")
     async def chat(request: Request, ...): ...
 
 In ``main.py``::

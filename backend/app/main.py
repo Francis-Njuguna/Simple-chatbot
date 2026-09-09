@@ -170,7 +170,14 @@ async def _warmup() -> None:
         reranker = get_reranker()
         await anyio.to_thread.run_sync(reranker.warmup)
         # A first predict() also compiles the graph; do one so query #1 doesn't.
-        await anyio.to_thread.run_sync(reranker.score, "warmup", ["warmup passage"])
+        # Warm the shape production actually uses — score_multi with the real
+        # form count and shortlist width — not a single pair, so the first user
+        # query does not pay for the batched path's own first run.
+        await anyio.to_thread.run_sync(
+            reranker.score_multi,
+            ["warmup query"] * max(settings.rerank_query_forms, 1),
+            ["warmup passage"] * max(settings.rerank_shortlist, 1),
+        )
         logger.info("Warm-up: cross-encoder reranker ready.")
     except Exception as exc:  # noqa: BLE001
         logger.warning("Warm-up: cross-encoder warm-up failed (%s)", exc)
@@ -180,11 +187,55 @@ async def _warmup() -> None:
 # Application lifespan
 # ---------------------------------------------------------------------------
 
+def _configure_torch_threads() -> None:
+    """Set torch's intra-op thread count before any model is loaded.
+
+    Must run before the first model touch: torch reads this when it builds its
+    thread pool, and changing it after a pool exists is either ignored or an
+    error depending on the build.
+
+    Why bother, when torch already picks a default? Because its default is
+    physical-cores/2 (2 on a 4-core box) and that is not the fastest setting for
+    a single request. Measured on 32 pairs of ms-marco-MiniLM-L-6-v2: 4 threads
+    3933ms vs the default 2 threads 4987ms vs 1 thread 5312ms. See the
+    TORCH_NUM_THREADS comment in config.py for the latency-vs-throughput
+    trade-off this represents — more threads wins one-at-a-time and loses under
+    concurrency, and 4 cores cannot serve both.
+
+    Non-fatal by design: a wrong or unsupported value should degrade to torch's
+    default, not stop the app from starting.
+    """
+    n = settings.torch_num_threads
+    if n <= 0:  # 0 means "leave torch alone"
+        return
+    try:
+        import os
+
+        import torch
+
+        previous = torch.get_num_threads()
+        torch.set_num_threads(n)
+        logger.info(
+            "torch intra-op threads: %d -> %d (%d CPUs visible)",
+            previous,
+            torch.get_num_threads(),
+            os.cpu_count() or 0,
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(
+            "Could not set torch threads to %d (%s: %s) — using torch's default",
+            n,
+            type(exc).__name__,
+            exc,
+        )
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Startup / shutdown logic.
 
     * Configures structured logging.
+    * Configures torch's CPU thread count before any model is touched.
     * Logs the active (redacted) database URL so credential mismatches are
       immediately visible in the container logs.
     * Creates all SQL tables on first run (idempotent via ``CREATE IF NOT EXISTS``).
@@ -192,6 +243,7 @@ async def lifespan(app: FastAPI):
       request does not pay cold-start costs.
     """
     setup_logging()
+    _configure_torch_threads()
 
     # Surface the active DB credentials on every startup so operators can
     # immediately spot mismatches between .env, docker-compose, and the
@@ -200,6 +252,13 @@ async def lifespan(app: FastAPI):
     # Report the active LLM provider and any missing/placeholder credentials
     # before anything tries to use it.
     settings.log_llm_config()
+    if settings.is_production:
+        production_problems = settings.validate_production_config()
+        if production_problems:
+            raise RuntimeError(
+                "Production configuration is unsafe or incomplete: "
+                + " | ".join(production_problems)
+            )
 
     await init_db()
     await _warmup()
@@ -233,8 +292,8 @@ app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
+    allow_origins=settings.cors_origin_list,
+    allow_credentials=settings.cors_allow_credentials,
     allow_methods=["*"],
     allow_headers=["*"],
     # Without this the browser hides X-Request-ID from JS, so a user reporting a

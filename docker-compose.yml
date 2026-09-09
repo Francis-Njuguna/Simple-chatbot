@@ -50,9 +50,13 @@ services:
 
       # --- LLM ---
       LLM_PROVIDER: openai
-      OPENAI_MODEL: gpt-4o
-      # Optional: override to a Qwen-compatible OpenAI endpoint via .env
-      # OPENAI_API_BASE: ${OPENAI_API_BASE}
+      OPENAI_API_BASE: https://integrate.api.nvidia.com/v1
+      OPENAI_MODEL: nvidia/nemotron-3-super-120b-a12b
+      LLM_MAX_CONCURRENCY: "1"
+      LLM_QUEUE_TIMEOUT: "60"
+      CHAT_RATE_LIMIT: 5/minute
+      CORS_ORIGINS: http://localhost:8501,http://localhost:8080,http://127.0.0.1:8501,http://127.0.0.1:8080
+      CORS_ALLOW_CREDENTIALS: "true"
 
       # --- Embeddings (sentence-transformers — no Ollama needed) ---
       EMBEDDING_PROVIDER: sentence-transformers
@@ -74,34 +78,24 @@ services:
     command: uvicorn backend.app.main:app --host 0.0.0.0 --port 8000 --workers 1
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      start_period: 5m
       interval: 30s
       timeout: 10s
       retries: 3
 
   # ---------------------------------------------------------------------------
-  # Streamlit frontend
-  # (also serves the embeddable chat widget at /app/static/chat-widget.js
-  #  via Streamlit static file serving)
+  # Standalone embeddable chat widget
   # ---------------------------------------------------------------------------
-  frontend:
+  widget:
     build:
       context: .
-      target: frontend
-    image: amref-helpdesk-rag-frontend
+      dockerfile: Dockerfile.widget
+    image: amref-helpdesk-rag-widget
     ports:
-      - "8501:8501"
-    environment:
-      API_BASE_URL: http://backend:8000/api/v1
-      BACKEND_URL: http://backend:8000
+      - "8501:80"
     depends_on:
       backend:
         condition: service_healthy
-    command: >
-      streamlit run frontend/streamlit_app.py
-      --server.port 8501
-      --server.address 0.0.0.0
-      --server.headless true
-      --server.enableStaticServing true
 
 volumes:
   postgres_data:

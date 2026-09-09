@@ -12,6 +12,7 @@ venv/
 # Environment — never commit real secrets
 .env
 .env.local
+.claude/
 # ...but DO commit the templates. This file previously listed .env.example and
 # .env.railway.example as ignore entries, so a fresh clone had no template to
 # copy from. Those entries are gone; these negations are belt-and-braces in

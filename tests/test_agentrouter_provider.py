@@ -182,6 +182,29 @@ def test_error_message_explains_an_agentrouter_401() -> None:
     assert "not a gap in the knowledge base" in message
 
 
+def test_error_message_distinguishes_a_403_from_a_401() -> None:
+    """403 means the key is fine but the plan lacks that model — say so.
+
+    Measured 2026-08-18 while A/B-ing models: this key answers on
+    ``claude-opus-5`` and returns ``403 该令牌无权访问模型 claude-haiku-4-5``
+    ("this token is not authorised for model ...") for haiku-4-5 and
+    sonnet-4-5. The old message called that "rejected the configured
+    credentials", which points at rotating a key that was never the problem.
+    """
+    service = _service_with(_agentrouter_settings(AGENTROUTER_MODEL="claude-haiku-4-5"))
+
+    class PermissionDeniedError(Exception):
+        status_code = 403
+
+    message = service._error_message(PermissionDeniedError("403"))
+    assert "claude-haiku-4-5" in message, "must name the model that was refused"
+    assert "403" in message
+    assert "key itself is valid" in message
+    # The 401 advice must NOT appear — that is the wrong remedy for a 403.
+    assert "AGENTROUTER_API_KEY" not in message
+    assert "not a gap in the knowledge base" in message
+
+
 # ---------------------------------------------------------------------------
 # Configuration validation
 # ---------------------------------------------------------------------------
@@ -220,12 +243,15 @@ def test_validation_never_leaks_the_credential() -> None:
 
 
 def _live_key() -> str:
-    """The real key, only if the environment actually has one configured."""
+    """Return a key only when the legacy live test was explicitly requested."""
+    if os.getenv("RUN_AGENTROUTER_LIVE") != "1":
+        return ""
     settings = get_settings()
     return os.getenv("AGENTROUTER_API_KEY") or settings.agentrouter_api_key or ""
 
 
 @pytest.mark.asyncio
+@pytest.mark.live
 async def test_live_agentrouter_generates_a_grounded_answer() -> None:
     """A real AgentRouter → Claude call answers from the supplied context.
 
@@ -269,6 +295,7 @@ async def test_live_agentrouter_generates_a_grounded_answer() -> None:
 
 
 @pytest.mark.asyncio
+@pytest.mark.live
 async def test_live_agentrouter_answers_a_short_keyword_query() -> None:
     """A bare keyword must not be declined when the context covers it.
 

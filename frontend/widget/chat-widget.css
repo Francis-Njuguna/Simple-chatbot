@@ -276,6 +276,30 @@
   padding: 4px 2px;
 }
 
+/* Trailing caret in a streaming answer bubble. Present only while tokens are
+   still arriving, and removed by finish(), so it doubles as the "still working"
+   indicator once the bubble has replaced .acw-typing. */
+.acw-caret {
+  display: inline-block;
+  margin-left: 1px;
+  opacity: 0.55;
+  animation: acw-caret-blink 1s step-end infinite;
+}
+
+@keyframes acw-caret-blink {
+  50% {
+    opacity: 0;
+  }
+}
+
+/* Respect users who have asked for less motion — the caret still shows
+   position, it just stops flashing. */
+@media (prefers-reduced-motion: reduce) {
+  .acw-caret {
+    animation: none;
+  }
+}
+
 .acw-error {
   align-self: center;
   color: #d71920;

@@ -1,0 +1,1452 @@
+{
+  "metadata": {
+    "timestamp_utc": "2026-09-05T12:44:48.105254+00:00",
+    "python_version": "3.14.6 (tags/v3.14.6:c63aec6, Jun 10 2026, 10:26:10) [MSC v.1944 64 bit (AMD64)]",
+    "platform": "Windows-10-10.0.19045-SP0",
+    "hostname": "DESKTOP-JREQF9U"
+  },
+  "configuration": {
+    "provider": "NVIDIA NIM (OpenAI-compatible transport)",
+    "model": "nvidia/nemotron-3-super-120b-a12b",
+    "api_base": "https://integrate.api.nvidia.com/v1",
+    "llm_timeout_s": 25,
+    "first_token_timeout_s": 30.0,
+    "stream_stall_timeout_s": 30.0,
+    "max_output_tokens": 2048,
+    "temperature": 0.0,
+    "max_retries": 1,
+    "llm_max_concurrency": 1,
+    "llm_queue_timeout_s": 60.0,
+    "http_max_connections": 1000,
+    "http_max_keepalive": 100,
+    "streaming_path": "LLMService.stream_answer / NVIDIA SSE",
+    "embedding_provider": "sentence-transformers",
+    "embedding_model": "sentence-transformers/all-MiniLM-L6-v2",
+    "embedding_device": "cpu",
+    "rerank_enabled": true,
+    "rerank_model": "cross-encoder/ms-marco-MiniLM-L-6-v2",
+    "rerank_quantize": true,
+    "rerank_shortlist": 8,
+    "rerank_query_forms": 2,
+    "top_k_retrieval": 5,
+    "db_pool_size": 5,
+    "db_max_overflow": 10,
+    "db_pool_timeout_s": 30,
+    "chroma_mode": "auto",
+    "chroma_persist_dir": "./data/chroma"
+  },
+  "queries": [
+    "How do I set up Microsoft Authenticator?",
+    "I changed phones and Authenticator is blocking my login.",
+    "How can I enroll for 2FA on Office 365?",
+    "How do I log in to the LMS?",
+    "How do I log into Moodle?",
+    "I cant acces moddle, how do I sine in?",
+    "My Moodle assignments are not opening.",
+    "How do I reset my student portal password?",
+    "My Student Portal login is not working.",
+    "I forgot my password and am locked out.",
+    "How do I register for and take a VAS exam?",
+    "Where are the VAS training slides?",
+    "What is SMOWL proctoring?",
+    "SMOWL camera is not working during my exam.",
+    "How do I access my university email?",
+    "Where do I sign in to corporate Outlook?",
+    "My laptop cannot connect to the campus Wi-Fi.",
+    "The portal shows an error when I upload a document.",
+    "Hi, can you help me contact the Amref Help Desk?",
+    "Please help me log in."
+  ],
+  "fixed_context_chars": 1151,
+  "isolated": {
+    "1": {
+      "concurrency": 1,
+      "requests": 5,
+      "successes": 4,
+      "failures": 1,
+      "success_rate": 0.8,
+      "timeout_rate": 0.0,
+      "wall_s": 12.338736499950755,
+      "throughput_answers_per_s": 0.32418230181153185,
+      "connection_to_headers_s": {
+        "n": 4,
+        "mean": 0.5028112249856349,
+        "median": 0.4283737999794539,
+        "p95": 0.7007946849858855,
+        "min": 0.40586009999969974,
+        "max": 0.7486371999839321
+      },
+      "ttft_after_headers_s": {
+        "n": 4,
+        "mean": 1.609895025001606,
+        "median": 1.1626577000133693,
+        "p95": 3.085378134963685,
+        "min": 0.6961795000243001,
+        "max": 3.418085199955385
+      },
+      "visible_from_request_s": {
+        "n": 4,
+        "mean": 2.112706249987241,
+        "median": 1.7505065499863122,
+        "p95": 3.5426547999610194,
+        "min": 1.1258666000212543,
+        "max": 3.823945299955085
+      },
+      "post_first_visible_to_completion_s": {
+        "n": 4,
+        "mean": 0.8011828499875264,
+        "median": 0.3491951999894809,
+        "p95": 1.9416907350096155,
+        "min": 0.28966859995853156,
+        "max": 2.2166724000126123
+      },
+      "total_generation_s": {
+        "n": 4,
+        "mean": 2.9138890999747673,
+        "median": 2.087071499961894,
+        "p95": 5.47027662996552,
+        "min": 1.440795700007584,
+        "max": 6.040617699967697
+      },
+      "output_tokens": {
+        "n": 4,
+        "mean": 152.0,
+        "median": 154.0,
+        "p95": 165.5,
+        "min": 133.0,
+        "max": 167.0
+      },
+      "input_tokens": {
+        "n": 4,
+        "mean": 308.25,
+        "median": 308.0,
+        "p95": 311.55,
+        "min": 305.0,
+        "max": 312.0
+      },
+      "input_tokens_est": {
+        "n": 5,
+        "mean": 321.0,
+        "median": 321.0,
+        "p95": 325.2,
+        "min": 318.0,
+        "max": 326.0
+      },
+      "tokens_per_second": {
+        "n": 4,
+        "mean": 69.12053313604477,
+        "median": 72.84410651023926,
+        "p95": 102.02311247489534,
+        "min": 25.990719459177093,
+        "max": 104.8032000645235
+      },
+      "reasoning_tokens_observed": 4,
+      "http_statuses": {
+        "200": 5
+      },
+      "errors": {
+        "unknown": 1
+      },
+      "observations": [
+        {
+          "question": "How do I set up Microsoft Authenticator?",
+          "ok": true,
+          "error": "",
+          "http_statuses": [
+            200
+          ],
+          "connection_to_headers_s": 0.7486371999839321,
+          "first_frame_s": 1.1189972999854945,
+          "ttft_after_headers_s": 1.2000381000107154,
+          "visible_from_request_s": 1.9486752999946475,
+          "post_first_visible_to_completion_s": 0.28966859995853156,
+          "total_generation_s": 2.238343899953179,
+          "answer_chars": 229,
+          "reasoning_chars": 398,
+          "reasoning_tokens_observed": true,
+          "chunks": 14,
+          "input_tokens": 307,
+          "output_tokens": 133,
+          "input_tokens_est": 322,
+          "tokens_per_second": 59.41893022014269
+        },
+        {
+          "question": "I changed phones and Authenticator is blocking my login.",
+          "ok": true,
+          "error": "",
+          "http_statuses": [
+            200
+          ],
+          "connection_to_headers_s": 0.4296870999969542,
+          "first_frame_s": 0.584499099990353,
+          "ttft_after_headers_s": 0.6961795000243001,
+          "visible_from_request_s": 1.1258666000212543,
+          "post_first_visible_to_completion_s": 0.3149290999863297,
+          "total_generation_s": 1.440795700007584,
+          "answer_chars": 230,
+          "reasoning_chars": 452,
+          "reasoning_tokens_observed": true,
+          "chunks": 16,
+          "input_tokens": 309,
+          "output_tokens": 151,
+          "input_tokens_est": 326,
+          "tokens_per_second": 104.8032000645235
+        },
+        {
+          "question": "How can I enroll for 2FA on Office 365?",
+          "ok": true,
+          "error": "",
+          "http_statuses": [
+            200
+          ],
+          "connection_to_headers_s": 0.40586009999969974,
+          "first_frame_s": 0.800776699965354,
+          "ttft_after_headers_s": 3.418085199955385,
+          "visible_from_request_s": 3.823945299955085,
+          "post_first_visible_to_completion_s": 2.2166724000126123,
+          "total_generation_s": 6.040617699967697,
+          "answer_chars": 290,
+          "reasoning_chars": 426,
+          "reasoning_tokens_observed": true,
+          "chunks": 21,
+          "input_tokens": 312,
+          "output_tokens": 157,
+          "input_tokens_est": 321,
+          "tokens_per_second": 25.990719459177093
+        },
+        {
+          "question": "How do I log in to the LMS?",
+          "ok": false,
+          "error": "",
+          "http_statuses": [
+            200
+          ],
+          "connection_to_headers_s": 0.6802172999596223,
+          "first_frame_s": 0.6809226999757811,
+          "ttft_after_headers_s": null,
+          "visible_from_request_s": null,
+          "post_first_visible_to_completion_s": null,
+          "total_generation_s": 0.682001199980732,
+          "answer_chars": 0,
+          "reasoning_chars": 0,
+          "reasoning_tokens_observed": false,
+          "chunks": 0,
+          "input_tokens": null,
+          "output_tokens": null,
+          "input_tokens_est": 318,
+          "tokens_per_second": null
+        },
+        {
+          "question": "How do I log into Moodle?",
+          "ok": true,
+          "error": "",
+          "http_statuses": [
+            200
+          ],
+          "connection_to_headers_s": 0.4270604999619536,
+          "first_frame_s": 0.5910479999729432,
+          "ttft_after_headers_s": 1.1252773000160232,
+          "visible_from_request_s": 1.5523377999779768,
+          "post_first_visible_to_completion_s": 0.3834612999926321,
+          "total_generation_s": 1.935799099970609,
+          "answer_chars": 177,
+          "reasoning_chars": 611,
+          "reasoning_tokens_observed": true,
+          "chunks": 12,
+          "input_tokens": 305,
+          "output_tokens": 167,
+          "input_tokens_est": 318,
+          "tokens_per_second": 86.26928280033582
+        }
+      ]
+    },
+    "2": {
+      "concurrency": 2,
+      "requests": 5,
+      "successes": 5,
+      "failures": 0,
+      "success_rate": 1.0,
+      "timeout_rate": 0.0,
+      "wall_s": 7.1834310999838635,
+      "throughput_answers_per_s": 0.6960462111220405,
+      "connection_to_headers_s": {
+        "n": 5,
+        "mean": 0.48996307998895644,
+        "median": 0.4374608999933116,
+        "p95": 0.6818106599966995,
+        "min": 0.397478399972897,
+        "max": 0.7378763000015169
+      },
+      "ttft_after_headers_s": {
+        "n": 5,
+        "mean": 1.7299771399935708,
+        "median": 1.0211052999948151,
+        "p95": 3.599738579988479,
+        "min": 0.8364894000114873,
+        "max": 4.070395499991719
+      },
+      "visible_from_request_s": {
+        "n": 5,
+        "mean": 2.219940219982527,
+        "median": 1.4623326999717392,
+        "p95": 4.097282559983432,
+        "min": 1.2339677999843843,
+        "max": 4.50785639998503
+      },
+      "post_first_visible_to_completion_s": {
+        "n": 5,
+        "mean": 0.6152035600040108,
+        "median": 0.40419850003672764,
+        "p95": 1.350818600016646,
+        "min": 0.13403590000234544,
+        "max": 1.49265650002053
+      },
+      "total_generation_s": {
+        "n": 5,
+        "mean": 2.835143779986538,
+        "median": 1.7022168999537826,
+        "p95": 5.022587459988426,
+        "min": 1.5963685999740846,
+        "max": 5.29132339998614
+      },
+      "output_tokens": {
+        "n": 5,
+        "mean": 173.2,
+        "median": 166.0,
+        "p95": 221.39999999999998,
+        "min": 137.0,
+        "max": 230.0
+      },
+      "input_tokens": {
+        "n": 5,
+        "mean": 308.0,
+        "median": 307.0,
+        "p95": 311.4,
+        "min": 305.0,
+        "max": 312.0
+      },
+      "input_tokens_est": {
+        "n": 5,
+        "mean": 321.0,
+        "median": 321.0,
+        "p95": 325.2,
+        "min": 318.0,
+        "max": 326.0
+      },
+      "tokens_per_second": {
+        "n": 5,
+        "mean": 73.43936182347484,
+        "median": 80.48328036439993,
+        "p95": 101.01361553877229,
+        "min": 35.34087521478838,
+        "max": 103.98600924792359
+      },
+      "reasoning_tokens_observed": 5,
+      "http_statuses": {
+        "200": 5
+      },
+      "errors": {},
+      "observations": [
+        {
+          "question": "How do I set up Microsoft Authenticator?",
+          "ok": true,
+          "error": "",
+          "http_statuses": [
+            200
+          ],
+          "connection_to_headers_s": 0.4194516999996267,
+          "first_frame_s": 0.8219569999491796,
+          "ttft_after_headers_s": 1.0211052999948151,
+          "visible_from_request_s": 1.4405569999944419,
+          "post_first_visible_to_completion_s": 0.2616598999593407,
+          "total_generation_s": 1.7022168999537826,
+          "answer_chars": 240,
+          "reasoning_chars": 398,
+          "reasoning_tokens_observed": true,
+          "chunks": 16,
+          "input_tokens": 307,
+          "output_tokens": 137,
+          "input_tokens_est": 322,
+          "tokens_per_second": 80.48328036439993
+        },
+        {
+          "question": "I changed phones and Authenticator is blocking my login.",
+          "ok": true,
+          "error": "",
+          "http_statuses": [
+            200
+          ],
+          "connection_to_headers_s": 0.7378763000015169,
+          "first_frame_s": 1.121711099985987,
+          "ttft_after_headers_s": 1.7171108999755234,
+          "visible_from_request_s": 2.4549871999770403,
+          "post_first_visible_to_completion_s": 1.49265650002053,
+          "total_generation_s": 3.9476436999975704,
+          "answer_chars": 502,
+          "reasoning_chars": 562,
+          "reasoning_tokens_observed": true,
+          "chunks": 35,
+          "input_tokens": 309,
+          "output_tokens": 230,
+          "input_tokens_est": 326,
+          "tokens_per_second": 58.26260358809524
+        },
+        {
+          "question": "How can I enroll for 2FA on Office 365?",
+          "ok": true,
+          "error": "",
+          "http_statuses": [
+            200
+          ],
+          "connection_to_headers_s": 0.4374608999933116,
+          "first_frame_s": 3.2425801000208594,
+          "ttft_after_headers_s": 4.070395499991719,
+          "visible_from_request_s": 4.50785639998503,
+          "post_first_visible_to_completion_s": 0.7834670000011101,
+          "total_generation_s": 5.29132339998614,
+          "answer_chars": 383,
+          "reasoning_chars": 426,
+          "reasoning_tokens_observed": true,
+          "chunks": 28,
+          "input_tokens": 312,
+          "output_tokens": 187,
+          "input_tokens_est": 321,
+          "tokens_per_second": 35.34087521478838
+        },
+        {
+          "question": "How do I log in to the LMS?",
+          "ok": true,
+          "error": "",
+          "http_statuses": [
+            200
+          ],
+          "connection_to_headers_s": 0.397478399972897,
+          "first_frame_s": 0.5486950000049546,
+          "ttft_after_headers_s": 0.8364894000114873,
+          "visible_from_request_s": 1.2339677999843843,
+          "post_first_visible_to_completion_s": 0.40419850003672764,
+          "total_generation_s": 1.638166300021112,
+          "answer_chars": 208,
+          "reasoning_chars": 450,
+          "reasoning_tokens_observed": true,
+          "chunks": 15,
+          "input_tokens": 307,
+          "output_tokens": 146,
+          "input_tokens_est": 318,
+          "tokens_per_second": 89.12404070216706
+        },
+        {
+          "question": "How do I log into Moodle?",
+          "ok": true,
+          "error": "",
+          "http_statuses": [
+            200
+          ],
+          "connection_to_headers_s": 0.45754809997742996,
+          "first_frame_s": 0.6132946999859996,
+          "ttft_after_headers_s": 1.0047845999943092,
+          "visible_from_request_s": 1.4623326999717392,
+          "post_first_visible_to_completion_s": 0.13403590000234544,
+          "total_generation_s": 1.5963685999740846,
+          "answer_chars": 170,
+          "reasoning_chars": 608,
+          "reasoning_tokens_observed": true,
+          "chunks": 11,
+          "input_tokens": 305,
+          "output_tokens": 166,
+          "input_tokens_est": 318,
+          "tokens_per_second": 103.98600924792359
+        }
+      ]
+    },
+    "5": {
+      "concurrency": 5,
+      "requests": 5,
+      "successes": 4,
+      "failures": 1,
+      "success_rate": 0.8,
+      "timeout_rate": 0.0,
+      "wall_s": 25.237181600008626,
+      "throughput_answers_per_s": 0.15849630372349632,
+      "connection_to_headers_s": {
+        "n": 4,
+        "mean": 0.6967304250138113,
+        "median": 0.7681231500173453,
+        "p95": 0.8182727600302314,
+        "min": 0.4266813999856822,
+        "max": 0.8239940000348724
+      },
+      "ttft_after_headers_s": {
+        "n": 4,
+        "mean": 8.347301099987817,
+        "median": 5.421390050003538,
+        "p95": 19.575255049997942,
+        "min": 0.6923702999483794,
+        "max": 21.854053999995813
+      },
+      "visible_from_request_s": {
+        "n": 4,
+        "mean": 9.044031525001628,
+        "median": 6.009927700011758,
+        "p95": 20.388209035032197,
+        "min": 1.4782226999523118,
+        "max": 22.678048000030685
+      },
+      "post_first_visible_to_completion_s": {
+        "n": 4,
+        "mean": 1.4161228499870049,
+        "median": 1.4520461999927647,
+        "p95": 2.5044301299669316,
+        "min": 0.20369809999829158,
+        "max": 2.5567008999641985
+      },
+      "total_generation_s": {
+        "n": 4,
+        "mean": 10.460154374988633,
+        "median": 7.461973900004523,
+        "p95": 22.892639164999128,
+        "min": 1.6819207999506034,
+        "max": 25.234748899994884
+      },
+      "output_tokens": {
+        "n": 4,
+        "mean": 156.25,
+        "median": 146.5,
+        "p95": 198.35,
+        "min": 126.0,
+        "max": 206.0
+      },
+      "input_tokens": {
+        "n": 4,
+        "mean": 308.25,
+        "median": 308.0,
+        "p95": 311.55,
+        "min": 305.0,
+        "max": 312.0
+      },
+      "input_tokens_est": {
+        "n": 5,
+        "mean": 321.0,
+        "median": 321.0,
+        "p95": 325.2,
+        "min": 318.0,
+        "max": 326.0
+      },
+      "tokens_per_second": {
+        "n": 4,
+        "mean": 35.49932178438081,
+        "median": 27.477562266218687,
+        "p95": 75.56829116657732,
+        "min": 4.993114871058833,
+        "max": 82.04904773402704
+      },
+      "reasoning_tokens_observed": 4,
+      "http_statuses": {
+        "200": 5
+      },
+      "errors": {
+        "unknown": 1
+      },
+      "observations": [
+        {
+          "question": "How do I set up Microsoft Authenticator?",
+          "ok": false,
+          "error": "",
+          "http_statuses": [
+            200
+          ],
+          "connection_to_headers_s": 0.3985361999948509,
+          "first_frame_s": 0.39880050002830103,
+          "ttft_after_headers_s": null,
+          "visible_from_request_s": null,
+          "post_first_visible_to_completion_s": null,
+          "total_generation_s": 0.39963510003872216,
+          "answer_chars": 0,
+          "reasoning_chars": 0,
+          "reasoning_tokens_observed": false,
+          "chunks": 0,
+          "input_tokens": null,
+          "output_tokens": null,
+          "input_tokens_est": 322,
+          "tokens_per_second": null
+        },
+        {
+          "question": "I changed phones and Authenticator is blocking my login.",
+          "ok": true,
+          "error": "",
+          "http_statuses": [
+            200
+          ],
+          "connection_to_headers_s": 0.4266813999856822,
+          "first_frame_s": 0.8296090000076219,
+          "ttft_after_headers_s": 4.180719099997077,
+          "visible_from_request_s": 4.607400499982759,
+          "post_first_visible_to_completion_s": 0.6958633000031114,
+          "total_generation_s": 5.303263799985871,
+          "answer_chars": 375,
+          "reasoning_chars": 569,
+          "reasoning_tokens_observed": true,
+          "chunks": 25,
+          "input_tokens": 309,
+          "output_tokens": 206,
+          "input_tokens_est": 326,
+          "tokens_per_second": 38.84400395102896
+        },
+        {
+          "question": "How can I enroll for 2FA on Office 365?",
+          "ok": true,
+          "error": "",
+          "http_statuses": [
+            200
+          ],
+          "connection_to_headers_s": 0.7503939000307582,
+          "first_frame_s": 4.103460300015286,
+          "ttft_after_headers_s": 6.662061000009999,
+          "visible_from_request_s": 7.412454900040757,
+          "post_first_visible_to_completion_s": 2.208229099982418,
+          "total_generation_s": 9.620684000023175,
+          "answer_chars": 291,
+          "reasoning_chars": 418,
+          "reasoning_tokens_observed": true,
+          "chunks": 21,
+          "input_tokens": 312,
+          "output_tokens": 155,
+          "input_tokens_est": 321,
+          "tokens_per_second": 16.111120581408414
+        },
+        {
+          "question": "How do I log in to the LMS?",
+          "ok": true,
+          "error": "",
+          "http_statuses": [
+            200
+          ],
+          "connection_to_headers_s": 0.7858524000039324,
+          "first_frame_s": 0.9267729999846779,
+          "ttft_after_headers_s": 0.6923702999483794,
+          "visible_from_request_s": 1.4782226999523118,
+          "post_first_visible_to_completion_s": 0.20369809999829158,
+          "total_generation_s": 1.6819207999506034,
+          "answer_chars": 188,
+          "reasoning_chars": 449,
+          "reasoning_tokens_observed": true,
+          "chunks": 12,
+          "input_tokens": 307,
+          "output_tokens": 138,
+          "input_tokens_est": 318,
+          "tokens_per_second": 82.04904773402704
+        },
+        {
+          "question": "How do I log into Moodle?",
+          "ok": true,
+          "error": "",
+          "http_statuses": [
+            200
+          ],
+          "connection_to_headers_s": 0.8239940000348724,
+          "first_frame_s": 16.652733800001442,
+          "ttft_after_headers_s": 21.854053999995813,
+          "visible_from_request_s": 22.678048000030685,
+          "post_first_visible_to_completion_s": 2.5567008999641985,
+          "total_generation_s": 25.234748899994884,
+          "answer_chars": 175,
+          "reasoning_chars": 436,
+          "reasoning_tokens_observed": true,
+          "chunks": 12,
+          "input_tokens": 305,
+          "output_tokens": 126,
+          "input_tokens_est": 318,
+          "tokens_per_second": 4.993114871058833
+        }
+      ]
+    }
+  },
+  "rag": {
+    "requests": 20,
+    "observations": [
+      {
+        "question": "How do I set up Microsoft Authenticator?",
+        "query_index": 1,
+        "session_history_ms": 2215.9686999511905,
+        "embedding_ms": 129.38410002971068,
+        "retrieval_wrapper_ms": 4779.6507000457495,
+        "retrieval_trace_ms": {
+          "query_processing": 2635.585699987132,
+          "vector": 343.2413000264205,
+          "bm25": 1.644900010433048,
+          "rerank": 1796.49859998608,
+          "search": 2143.3909999905154
+        },
+        "retrieval_counts": {
+          "n_bm25": 14,
+          "n_vector": 40,
+          "n_fused": 41,
+          "n_after_rerank": 6,
+          "n_final": 5,
+          "n_images": 3
+        },
+        "hydration_ms": 64.86179999774322,
+        "context_build_ms": 0.1474000164307654,
+        "context_chars": 2561,
+        "llm_generation_ms": 20971.375299966894,
+        "llm_ttft_ms": 12926.47519998718,
+        "answer": "**How to set up Microsoft Authenticator (based on the AMREF Help Desk knowledge base)**  \n\n1. **Sign in** – Go to the Microsoft 365 sign‑in page and enter your AmIU email address (username) and password.  \n2. **Prompt for more info** – After clicking **Sign in**, you will be asked for additional verification information.  \n3. **Choose Next** – Select **Next** to proceed with the multi‑factor authentication setup.  \n4. **Select Microsoft Authenticator** – The default method is the free Microsoft Authenticator app. If the app is already installed on your phone, choose **Next** and follow the prompts to add your account.  \n5. **Download the app (if needed)** – If you don’t have Microsoft Authenticator, download it from the **Google Play Store** or **Apple App Store** on your mobile device.  \n6. **Open the app and scan the QR code** – Launch Microsoft Authenticator on your phone, then scan the QR code displayed on the computer screen.  \n7. **Confirm the scan** – After a successful scan, click **Next** on the computer.  \n8. **Enter phone details** – Provide your country code and phone number, then click **Next**.  \n9. **Receive the verification code** – Microsoft will send a code to your mobile phone (see the screenshot *“You will receive a code from Microsoft on your mobile phone.”*).  \n10. **Enter the code** – Type the code you received and click **Next** (see the screenshot *“Enter the code and click next.”*).  \n11. **Finish** – Click **Next** once more; you will see a confirmation that your account has been successfully set up.  \n\n**Sources**  \n- Setting up Microsoft Authenticator – https://helpdesk.amref.ac.ke/knowledgebase.php?article=11  \n- Set up your Microsoft 365 sign-in for multi-factor authentication – https://helpdesk.amref.ac.ke/knowledgebase.php?article=10",
+        "llm_ok": true,
+        "answer_chars": 1796,
+        "reasoning_tokens_observed": false,
+        "persist_ms": 56.2950000166893,
+        "total_end_to_end_ms": 28217.85529999761
+      },
+      {
+        "question": "I changed phones and Authenticator is blocking my login.",
+        "query_index": 2,
+        "session_history_ms": 124.78339998051524,
+        "embedding_ms": 46.09590000472963,
+        "retrieval_wrapper_ms": 1866.2808999652043,
+        "retrieval_trace_ms": {
+          "query_processing": 3.7586999824270606,
+          "vector": 913.4454000159167,
+          "bm25": 8.237400033976883,
+          "rerank": 938.3637999999337,
+          "search": 1862.0848000282422
+        },
+        "retrieval_counts": {
+          "n_bm25": 27,
+          "n_vector": 40,
+          "n_fused": 40,
+          "n_after_rerank": 4,
+          "n_final": 4,
+          "n_images": 3
+        },
+        "hydration_ms": 11.622900026850402,
+        "context_build_ms": 0.11449999874457717,
+        "context_chars": 2447,
+        "llm_generation_ms": 9080.29350003926,
+        "llm_ttft_ms": 5090.962000016589,
+        "answer": "To regain access after changing phones, you can use an alternative verification method (e.g., SMS) to sign in, then set up the Microsoft Authenticator app on your new device.\n\n**1. Sign in with an alternative method**  \n- Enter your AmIU email address and password on the sign‑in page.  \n- When prompted for the authenticator code, choose **“I want to set up a different method”** (or the option to use SMS) 【10†L1-L4】.  \n- Provide your mobile number; Microsoft will send an SMS with a 6‑digit code.  \n- Enter that code and click **Next** to complete sign‑in 【10†L5-L8】.\n\n**2. Set up Microsoft Authenticator on the new phone**  \n- After signing in, you will be redirected to the Microsoft Authenticator setup page.  \n- **Download** the Microsoft Authenticator app from the Google Play Store or Apple App Store on your new phone 【11†L1-L4】.  \n- Open the app and **scan the QR code** displayed on the screen 【11†L5-L6】.  \n- Click **Next** after the scan succeeds 【11†L7】.  \n- Enter your country code and phone number, then click **Next** 【11†L8-L9】.  \n- You will receive a code from Microsoft on your mobile phone; **enter that code** and click **Next** 【11†L10-L11】.  \n- Click **Next** again to finish the setup 【11†L12】.  \n- You should see the confirmation message: **“Congratulations! You have successfully set up your account.”** 【11†L13】.\n\nIf you prefer to continue using SMS as your second factor instead of the authenticator app, you can keep the SMS method selected during step 1; the article notes that the authenticator app is recommended for a faster, more secure experience 【10†L13-L15】.\n\n**Sources**  \n- Setting up Microsoft Authenticator – https://helpdesk.amref.ac.ke/knowledgebase.php?article=11  \n- Set up your Microsoft 365 sign-in for multi-factor authentication – https://helpdesk.amref.ac.ke/knowledgebase.php?article=10",
+        "llm_ok": true,
+        "answer_chars": 1839,
+        "reasoning_tokens_observed": false,
+        "persist_ms": 104.25269999541342,
+        "total_end_to_end_ms": 11233.729300030973
+      },
+      {
+        "question": "How can I enroll for 2FA on Office 365?",
+        "query_index": 3,
+        "session_history_ms": 50.599200010765344,
+        "embedding_ms": 115.82909995922819,
+        "retrieval_wrapper_ms": 1269.2154999822378,
+        "retrieval_trace_ms": {
+          "query_processing": 1.3620000099763274,
+          "vector": 264.57749999826774,
+          "bm25": 1.7398999771103263,
+          "rerank": 999.451500014402,
+          "search": 1267.4913000082597
+        },
+        "retrieval_counts": {
+          "n_bm25": 22,
+          "n_vector": 40,
+          "n_fused": 41,
+          "n_after_rerank": 3,
+          "n_final": 3,
+          "n_images": 3
+        },
+        "hydration_ms": 15.228800009936094,
+        "context_build_ms": 0.18260005163028836,
+        "context_chars": 2081,
+        "llm_generation_ms": 15795.787500042934,
+        "llm_ttft_ms": 9787.01790003106,
+        "answer": "To enroll for 2‑step verification (2FA) on your Office 365/Microsoft 365 account, follow the steps outlined in the AMREF Knowledge Base article **“Set up your Microsoft 365 sign‑in for multi‑factor authentication”** [1]:\n\n1. Sign in to Microsoft 365 with your work or school account using your password.  \n2. After you click **Sign in**, you’ll be prompted for more information (see the dialog‑box screenshot below).  \n3. Choose **Next**.  \n4. The default method is the **Microsoft Authenticator** app.  \n   - If the app is already installed on your mobile device, select **Next** and follow the on‑screen prompts to add this account.  \n   - If you don’t have the app, click the provided link to download and install Microsoft Authenticator, then repeat step 4.  \n5. As an alternative, you can opt to receive a verification code via SMS; follow the prompts to enter your phone number and the code you receive.\n\nThese steps enable either the Microsoft Authenticator app or SMS as your additional verification method for Office 365 sign‑in.\n\n[1] Set up your Microsoft 365 sign-in for multi-factor authentication – https://helpdesk.amref.ac.ke/knowledgebase.php?article=10",
+        "llm_ok": true,
+        "answer_chars": 1169,
+        "reasoning_tokens_observed": false,
+        "persist_ms": 128.7406999617815,
+        "total_end_to_end_ms": 17375.659800018184
+      },
+      {
+        "question": "How do I log in to the LMS?",
+        "query_index": 4,
+        "session_history_ms": 36.57050000037998,
+        "embedding_ms": 53.70119999861345,
+        "retrieval_wrapper_ms": 1895.8666000398807,
+        "retrieval_trace_ms": {
+          "query_processing": 0.5989999626763165,
+          "vector": 120.17359997844324,
+          "bm25": 3.73659998876974,
+          "rerank": 1768.1915999855846,
+          "search": 1894.9283999972977
+        },
+        "retrieval_counts": {
+          "n_bm25": 32,
+          "n_vector": 40,
+          "n_fused": 41,
+          "n_after_rerank": 8,
+          "n_final": 5,
+          "n_images": 3
+        },
+        "hydration_ms": 12.550500046927482,
+        "context_build_ms": 0.1382000045850873,
+        "context_chars": 3422,
+        "llm_generation_ms": 22925.38530001184,
+        "llm_ttft_ms": 11506.721200013999,
+        "answer": "To log in to the Amref Learning Management System (LMS), follow these steps:\n\n1. **Open the LMS site** – Type **lms.amref.ac.ke** into your browser (Chrome, Mozilla, Firefox, Internet Explorer, or Opera Mini) or search Google for “lms amref” 【see screenshot below】.  \n2. **Click Login/Register** – At the top‑right of the LMS homepage, click the **Login/Register** button.  \n3. **Choose Amref email sign‑in** – In the pop‑up window, click the **“Use your Amref email address to sign in”** button.  \n4. **Enter your credentials** – You will be redirected to the AMREF email login page; input your Amref email address and password, then submit.  \n5. **Access your courses** – After logging in, go to the left‑hand navigation pane on the dashboard, select **My courses**, and choose the course you wish to study (e.g., “induction module”).\n\nThese steps are based on the official guide for logging into the LMS.  \n\n**Source:** How to login to LMS – https://helpdesk.amref.ac.ke/knowledgebase.php?article=1",
+        "llm_ok": true,
+        "answer_chars": 1001,
+        "reasoning_tokens_observed": false,
+        "persist_ms": 1883.1421000068076,
+        "total_end_to_end_ms": 26807.481199968606
+      },
+      {
+        "question": "How do I log into Moodle?",
+        "query_index": 5,
+        "session_history_ms": 61.32949999300763,
+        "embedding_ms": 32.524999987799674,
+        "retrieval_wrapper_ms": 848.7772999797016,
+        "retrieval_trace_ms": {
+          "query_processing": 1.8882000003941357,
+          "vector": 78.13280000118539,
+          "bm25": 1.1673999833874404,
+          "rerank": 766.2400000263005,
+          "search": 846.6946000116877
+        },
+        "retrieval_counts": {
+          "n_bm25": 29,
+          "n_vector": 40,
+          "n_fused": 41,
+          "n_after_rerank": 6,
+          "n_final": 5,
+          "n_images": 3
+        },
+        "hydration_ms": 4.194499982986599,
+        "context_build_ms": 0.12500002048909664,
+        "context_chars": 3422,
+        "llm_generation_ms": 12653.801799984649,
+        "llm_ttft_ms": 7588.311299972702,
+        "answer": "To log into Moodle (the Amref LMS), follow these steps:\n\n1. Open your browser (Chrome, Mozilla, Firefox, Internet Explorer, or Opera Mini) and go to **lms.amref.ac.ke** or search Google for “lms amref”.  \n2. On the homepage, click **‘Login/Register’** in the top‑right corner.  \n3. In the pop‑up window, click the **“Use your Amref email address to sign in”** button.  \n4. You will be redirected to the AMREF email login page; enter your Amref email address and password.  \n5. After signing in, you’ll arrive at the LMS dashboard. From the left navigation pane, select **“My courses”** and choose the course you wish to access (e.g., “induction module”).\n\n*Source: How to login to LMS – https://helpdesk.amref.ac.ke/knowledgebase.php?article=1*",
+        "llm_ok": true,
+        "answer_chars": 744,
+        "reasoning_tokens_observed": false,
+        "persist_ms": 35.425599955487996,
+        "total_end_to_end_ms": 13636.27960003214
+      },
+      {
+        "question": "I cant acces moddle, how do I sine in?",
+        "query_index": 6,
+        "session_history_ms": 58.71330003719777,
+        "embedding_ms": 69.65760001912713,
+        "retrieval_wrapper_ms": 1306.7627999698743,
+        "retrieval_trace_ms": {
+          "query_processing": 4.435000009834766,
+          "vector": 445.78639999963343,
+          "bm25": 6.730300025083125,
+          "rerank": 847.9709000093862,
+          "search": 1302.0242999773473
+        },
+        "retrieval_counts": {
+          "n_bm25": 32,
+          "n_vector": 40,
+          "n_fused": 41,
+          "n_after_rerank": 7,
+          "n_final": 6,
+          "n_images": 3
+        },
+        "hydration_ms": 9.476499981246889,
+        "context_build_ms": 0.3402999718673527,
+        "context_chars": 3992,
+        "llm_generation_ms": 25313.82499996107,
+        "llm_ttft_ms": 16026.798099977896,
+        "answer": "To sign in to the LMS (Moodle) at Amref, follow these steps:\n\n1. Open your browser (Chrome, Mozilla, Firefox, Internet Explorer, or Opera Mini) and type **lms.amref.ac.ke** into the address bar, or search Google for **“lms amref”**.  \n2. On the LMS homepage, click **‘Login/Register’** at the top‑right corner.  \n3. In the pop‑up window, select the button **“Use your Amref email address to sign in.”**  \n4. You will be redirected to the AMREF email login page; enter your Amref email address and password, then submit.  \n5. After logging in, you’ll arrive at the dashboard (see the screenshot below). From the left‑hand navigation menu, choose **“My courses”** and select the course you wish to access (e.g., “induction module”).  \n\nThese instructions are taken from the LMS login guide.  \n\n**Source:** How to login to LMS – https://helpdesk.amref.ac.ke/knowledgebase.php?article=1",
+        "llm_ok": true,
+        "answer_chars": 882,
+        "reasoning_tokens_observed": false,
+        "persist_ms": 1656.4147999743,
+        "total_end_to_end_ms": 28415.280899964273
+      },
+      {
+        "question": "My Moodle assignments are not opening.",
+        "query_index": 7,
+        "session_history_ms": 25.633999961428344,
+        "embedding_ms": 35.1539000403136,
+        "retrieval_wrapper_ms": 935.9162999899127,
+        "retrieval_trace_ms": {
+          "query_processing": 3.4432000247761607,
+          "vector": 45.428099983837456,
+          "bm25": 3.7327000172808766,
+          "rerank": 881.751200009603,
+          "search": 932.1047000121325
+        },
+        "retrieval_counts": {
+          "n_bm25": 27,
+          "n_vector": 40,
+          "n_fused": 40,
+          "n_after_rerank": 3,
+          "n_final": 3,
+          "n_images": 3
+        },
+        "hydration_ms": 13.761599955614656,
+        "context_build_ms": 0.15109998639672995,
+        "context_chars": 2672,
+        "llm_generation_ms": 30302.57579998579,
+        "llm_ttft_ms": 25087.893399992026,
+        "answer": "To get your Moodle assignments opening, first make sure you are successfully logged into the Amref LMS and can reach your course:\n\n1. Go to the LMS login page at **lms.amref.ac.ke**.  \n2. Enter your Amref email address (format firstname.lastname@mcampus.amref.ac.ke) and password, then sign in.  \n3. After login, you will be taken to the dashboard; on the left navigation pane click **“My courses”** and select the course containing the assignment (e.g., “induction module”).  \n\nIf the assignments still do not open after confirming you are logged into the correct course, you can request further assistance through the AmIU Help Desk:\n\n- From the LMS, hover over the **“Student Services”** menu and click the **Help Desk** link (see the screenshot in the article).  \n- Alternatively, visit the Help Desk website directly at **http://helpdesk.amref.ac.ke** or email **helpdesk@amref.ac.ke**; a ticket will be created automatically.\n\n*Note: The supplied knowledge base does not contain specific troubleshooting steps for Moodle assignments failing to open; the above covers the documented login and help‑desk access procedures.*  \n\nSources:  \n- How to login to LMS – https://helpdesk.amref.ac.ke/knowledgebase.php?article=1  \n- How to access the AmIU help desk – https://helpdesk.amref.ac.ke/knowledgebase.php?article=2",
+        "llm_ok": true,
+        "answer_chars": 1318,
+        "reasoning_tokens_observed": false,
+        "persist_ms": 1836.0768999555148,
+        "total_end_to_end_ms": 33149.41720000934
+      },
+      {
+        "question": "How do I reset my student portal password?",
+        "query_index": 8,
+        "session_history_ms": 436.3883000332862,
+        "embedding_ms": 49.29010005434975,
+        "retrieval_wrapper_ms": 829.158800013829,
+        "retrieval_trace_ms": {
+          "query_processing": 0.9059000294655561,
+          "vector": 66.9736000127159,
+          "bm25": 1.6415999853052199,
+          "rerank": 758.3285000291653,
+          "search": 828.0604999745265
+        },
+        "retrieval_counts": {
+          "n_bm25": 36,
+          "n_vector": 40,
+          "n_fused": 41,
+          "n_after_rerank": 8,
+          "n_final": 5,
+          "n_images": 3
+        },
+        "hydration_ms": 9.99490002868697,
+        "context_build_ms": 0.24289998691529036,
+        "context_chars": 3376,
+        "llm_generation_ms": 8164.061999996193,
+        "llm_ttft_ms": 5636.620900011621,
+        "answer": "To reset your Amref student portal password, follow these steps:\n\n1. Go to the student portal at **https://students.amref.ac.ke/** and click **“Forgot your password?”**.  \n2. Enter your Amref student email address and the characters shown in the CAPTCHA image.  \n3. Input your registered phone number; you will receive a verification code via SMS – enter that code.  \n4. Type your new password, then confirm it.  \n   - The password must be **at least 10 characters long**.  \n   - It must contain a mix of **uppercase and lowercase letters, numbers, and special characters**.  \n   - It must **not be any of your official names**.  \n5. Click **Finish** or **Submit**, then return to the portal and log in with your student email and the new password.\n\nSee the screenshots below for visual guidance (images from the reset‑password article).\n\n**Source:** Reset your student portal password – https://helpdesk.amref.ac.ke/knowledgebase.php?article=9",
+        "llm_ok": true,
+        "answer_chars": 944,
+        "reasoning_tokens_observed": false,
+        "persist_ms": 1704.3770999880508,
+        "total_end_to_end_ms": 11193.584900000133
+      },
+      {
+        "question": "My Student Portal login is not working.",
+        "query_index": 9,
+        "session_history_ms": 30.233099998440593,
+        "embedding_ms": 35.1830999716185,
+        "retrieval_wrapper_ms": 3730.454300006386,
+        "retrieval_trace_ms": {
+          "query_processing": 3.4401000011712313,
+          "vector": 74.85440000891685,
+          "bm25": 2.441600023303181,
+          "rerank": 934.1196999885142,
+          "search": 3726.6224999912083
+        },
+        "retrieval_counts": {
+          "n_bm25": 36,
+          "n_vector": 40,
+          "n_fused": 41,
+          "n_after_rerank": 7,
+          "n_final": 6,
+          "n_images": 3
+        },
+        "hydration_ms": 9.523399989120662,
+        "context_build_ms": 0.2606000052765012,
+        "context_chars": 3992,
+        "llm_generation_ms": 10037.586899998132,
+        "llm_ttft_ms": 3995.7449000212364,
+        "answer": "If your Student Portal login isn’t working, the most common fix is to reset your password using the Amref student email and phone number verification process.\n\n**Steps to reset your Student Portal password**\n\n1. Go to the Student Portal at **https://students.amref.ac.ke/#**.  \n2. Click **“Forgot your password?”** on the login page.  \n3. Enter your **Amref student email address** and the characters shown in the CAPTCHA, then submit.  \n4. Provide your **phone number**; you will receive a verification code via SMS.  \n5. Enter the code you received.  \n6. Type a **new password** that meets the following requirements and confirm it:  \n   - Minimum **10 characters** long.  \n   - Contains a mix of **uppercase and lowercase letters, numbers, and special characters**.  \n   - Is **not** any of your official names.  \n7. Finish the reset process, then return to the portal and log in with your student email and the new password.\n\nIf after resetting the password you still cannot log in, the knowledge base does not provide additional troubleshooting steps for the Student Portal login issue. In that case, please contact the AMREF Help Desk for further assistance.\n\n**Source:** Reset your student portal password – https://helpdesk.amref.ac.ke/knowledgebase.php?article=9",
+        "llm_ok": true,
+        "answer_chars": 1271,
+        "reasoning_tokens_observed": false,
+        "persist_ms": 568.7037999741733,
+        "total_end_to_end_ms": 14412.06450003665
+      },
+      {
+        "question": "I forgot my password and am locked out.",
+        "query_index": 10,
+        "session_history_ms": 38.89999998500571,
+        "embedding_ms": 45.36329995607957,
+        "retrieval_wrapper_ms": 1170.8935999777168,
+        "retrieval_trace_ms": {
+          "query_processing": 4.999400000087917,
+          "vector": 414.3986999988556,
+          "bm25": 1.4980999985709786,
+          "rerank": 748.1774000334553,
+          "search": 1165.4565999633633
+        },
+        "retrieval_counts": {
+          "n_bm25": 19,
+          "n_vector": 40,
+          "n_fused": 41,
+          "n_after_rerank": 5,
+          "n_final": 4,
+          "n_images": 3
+        },
+        "hydration_ms": 9.425199998077005,
+        "context_build_ms": 0.13240001862868667,
+        "context_chars": 2996,
+        "llm_generation_ms": 3917.9530999972485,
+        "llm_ttft_ms": 2235.8671000110917,
+        "answer": "To regain access to the Amref student portal when you’ve forgotten your password, follow the documented reset procedure:\n\n1. Go to the student portal at **https://students.amref.ac.ke/#**.  \n2. Click **“Forgot your password?”** on the login page.  \n3. Enter your **Amref student email address** and the characters shown in the CAPTCHA image.  \n4. Provide your **phone number** and then input the verification code sent via SMS.  \n5. Type a **new password** that meets the requirements (minimum 10 characters, mix of uppercase/lowercase letters, numbers, and special characters, and not your official name) and confirm it.  \n6. Finish the reset and return to the portal to log in with your student email and the new password.\n\n*See the screenshots below for visual guidance (images from the reset‑password article).*\n\n**Source:** Reset your student portal password – https://helpdesk.amref.ac.ke/knowledgebase.php?article=9",
+        "llm_ok": true,
+        "answer_chars": 922,
+        "reasoning_tokens_observed": false,
+        "persist_ms": 44.677099969703704,
+        "total_end_to_end_ms": 5227.502699999604
+      },
+      {
+        "question": "How do I register for and take a VAS exam?",
+        "query_index": 11,
+        "session_history_ms": 31.978700018953532,
+        "embedding_ms": 45.231299998704344,
+        "retrieval_wrapper_ms": 1118.5777999926358,
+        "retrieval_trace_ms": {
+          "query_processing": 1.5045999898575246,
+          "vector": 381.67960004648194,
+          "bm25": 2.242299960926175,
+          "rerank": 730.320299975574,
+          "search": 1116.5977999917232
+        },
+        "retrieval_counts": {
+          "n_bm25": 34,
+          "n_vector": 40,
+          "n_fused": 41,
+          "n_after_rerank": 8,
+          "n_final": 5,
+          "n_images": 3
+        },
+        "hydration_ms": 10.911800025496632,
+        "context_build_ms": 0.11260004248470068,
+        "context_chars": 2323,
+        "llm_generation_ms": 20168.377999973018,
+        "llm_ttft_ms": 7013.437199988402,
+        "answer": "**How to register for and take a VAS exam (based on the supplied KB articles)**  \n\n1. **Open the VAS portal** – go to https://vas.amref.ac.ke.  \n2. **Log in** – use one of the two login buttons and enter your email address and password (see the screenshot “Choose to log in from either of the two login buttons…”).  \n3. **Navigate to your exam** – click **“my courses”**, then select the exam you need (CAT or Final). This action takes you to the SMOWL registration page.  \n4. **Register on SMOWL**  \n   - Enter your **full name** and your **Amref (mcampus) email address** (see the screenshot “STEP 3 : Enter your details - Full Name and your A mref (mcampus) email address”).  \n   - **Allow camera access** so SMOWL can capture your image.  \n   - Install the SMOWL software if prompted (recommended browsers: Google Chrome or Mozilla Firefox; Safari is not supported).  \n   - Complete this registration **at least 72 hours before the exam starts**.  \n5. **When the exam time arrives**  \n   - Log back into VAS at https://vas.amref.ac.ke.  \n   - Again select **“my courses”** → choose the exam (CAT or Final).  \n   - Use **Google Chrome** for the best experience.  \n   - Follow the SMOWL screen‑monitoring prompts during the exam.  \n   - When you have finished, click **“submit and finish”** to end the exam session.  \n\n*Note:* The KB articles provide the registration and exam‑taking steps above; they do not detail the exact SMOWL software installation process or any troubleshooting beyond allowing camera access and using Chrome/Firefox.  \n\n**Sources**  \n- Article 14: *How to Register and Take Exams with SMOWL Proctoring Software* – https://helpdesk.amref.ac.ke/knowledgebase.php?article=14  \n- Article 15: *Taking examination With the SMOWL (Screen Monitoring)* – https://helpdesk.amref.ac.ke/knowledgebase.php?article=15",
+        "llm_ok": true,
+        "answer_chars": 1829,
+        "reasoning_tokens_observed": false,
+        "persist_ms": 84.35050002299249,
+        "total_end_to_end_ms": 21459.70289997058
+      },
+      {
+        "question": "Where are the VAS training slides?",
+        "query_index": 12,
+        "session_history_ms": 34.96409999206662,
+        "embedding_ms": 46.02199996588752,
+        "retrieval_wrapper_ms": 926.1565000051633,
+        "retrieval_trace_ms": {
+          "query_processing": 2.50250002136454,
+          "vector": 60.990900034084916,
+          "bm25": 0.7847000379115343,
+          "rerank": 860.3428000351414,
+          "search": 923.3208000077866
+        },
+        "retrieval_counts": {
+          "n_bm25": 29,
+          "n_vector": 40,
+          "n_fused": 40,
+          "n_after_rerank": 6,
+          "n_final": 3,
+          "n_images": 3
+        },
+        "hydration_ms": 13.791700010187924,
+        "context_build_ms": 0.11490000179037452,
+        "context_chars": 1484,
+        "llm_generation_ms": 5681.573599984404,
+        "llm_ttft_ms": 4668.334899994079,
+        "answer": "The VAS training slides are provided as the file **VAS_TRAINING-Presentation.pdf**, which you can access from the VAS TRAINING Presentation Slides article.\n\n**Source:** VAS TRAINING Presentation Slides – https://helpdesk.amref.ac.ke/knowledgebase.php?article=22",
+        "llm_ok": true,
+        "answer_chars": 261,
+        "reasoning_tokens_observed": false,
+        "persist_ms": 55.25049997959286,
+        "total_end_to_end_ms": 6757.934499997646
+      },
+      {
+        "question": "What is SMOWL proctoring?",
+        "query_index": 13,
+        "session_history_ms": 74.08539997413754,
+        "embedding_ms": 92.61839999817312,
+        "retrieval_wrapper_ms": 808.4952999488451,
+        "retrieval_trace_ms": {
+          "query_processing": 2.9636999825015664,
+          "vector": 161.7211999837309,
+          "bm25": 1.53489998774603,
+          "rerank": 640.7784000039101,
+          "search": 805.29970000498
+        },
+        "retrieval_counts": {
+          "n_bm25": 19,
+          "n_vector": 40,
+          "n_fused": 41,
+          "n_after_rerank": 8,
+          "n_final": 3,
+          "n_images": 3
+        },
+        "hydration_ms": 11.061099998187274,
+        "context_build_ms": 0.11629995424300432,
+        "context_chars": 1842,
+        "llm_generation_ms": 8337.717499991413,
+        "llm_ttft_ms": 7186.096000019461,
+        "answer": "SMOWL is an exam‑proctoring tool that monitors and secures online exams, helping to ensure assessment integrity and prevent cheating. It operates alongside the VAS‑Exam system and can be used within Moodle or other VLE/LMS platforms, allowing lecturers to supervise students remotely during exams.  \n\nSources:  \n- Exam proctoring software‑ SMOWL – https://helpdesk.amref.ac.ke/knowledgebase.php?article=18  \n- What Happens During a Proctored Exam with Smowl? – https://helpdesk.amref.ac.ke/knowledgebase.php?article=21  \n- Recorded training session‑ Lecturer exam proctoring using SMOWL – https://helpdesk.amref.ac.ke/knowledgebase.php?article=19",
+        "llm_ok": true,
+        "answer_chars": 646,
+        "reasoning_tokens_observed": false,
+        "persist_ms": 86.79810003377497,
+        "total_end_to_end_ms": 9410.970799974166
+      },
+      {
+        "question": "SMOWL camera is not working during my exam.",
+        "query_index": 14,
+        "session_history_ms": 64.66999999247491,
+        "embedding_ms": 90.2302999747917,
+        "retrieval_wrapper_ms": 1595.8061999990605,
+        "retrieval_trace_ms": {
+          "query_processing": 3.8901999942027032,
+          "vector": 399.0606000297703,
+          "bm25": 8.779900032095611,
+          "rerank": 1181.646599958185,
+          "search": 1591.5090000489727
+        },
+        "retrieval_counts": {
+          "n_bm25": 22,
+          "n_vector": 40,
+          "n_fused": 41,
+          "n_after_rerank": 8,
+          "n_final": 6,
+          "n_images": 3
+        },
+        "hydration_ms": 9.637399984057993,
+        "context_build_ms": 0.2645000349730253,
+        "context_chars": 2989,
+        "llm_generation_ms": 9446.150599978864,
+        "llm_ttft_ms": 5575.643999967724,
+        "answer": "**If the SMOWL camera isn’t working during your exam, follow these verified steps (based on the AMREF Help Desk articles):**\n\n1. **Use a supported browser** – Open the exam in **Google Chrome** or **Mozilla Firefox** (Safari is not supported)【14†source】.  \n2. **Grant browser camera permission** – When you reach the pre‑test page, allow the browser to access your webcam (see the screenshot “It's important to allow the SMOWL system to access your webcam to capture images”)【14†source】.  \n3. **Enable SMOWL to run** – After the browser permission is given, click the checkbox to let SMOWL run directly and then select **Open SMOWL**【15†source】.  \n4. **Confirm SMOWL launched correctly** – The SMOWL block should first show a loading state and then display a **navy‑blue computer icon**. If the icon is not navy blue, SMOWL has not started properly【15†source】.  \n5. **Refresh and repeat** – If the icon remains incorrect or the camera still isn’t detected, reload the exam page and repeat steps 2‑4.  \n6. **Re‑install SMOWL (if needed)** – Download and install the SMOWL software again, ensuring your PC meets the requirements (Windows 10/11 or macOS 10.15+ with a stable internet connection)【14†source】.  \n7. **Proceed with the exam** – Once the navy‑blue icon appears, click **Attempt Quiz → Start Attempt**, then complete the exam and click **Submit and Finish**【15†source】.\n\nIf the camera still fails after these steps, the issue may be outside the documented procedure; please contact the AMREF Help Desk for further assistance.\n\n**Sources**  \n- Article 14: *How to Register and Take Exams with SMOWL Proctoring Software* – https://helpdesk.amref.ac.ke/knowledgebase.php?article=14  \n- Article 15: *Taking examination With the SMOWL (Screen Monitoring)* – https://helpdesk.amref.ac.ke/knowledgebase.php?article=15",
+        "llm_ok": true,
+        "answer_chars": 1818,
+        "reasoning_tokens_observed": false,
+        "persist_ms": 2291.9160000164993,
+        "total_end_to_end_ms": 13498.87370003853
+      },
+      {
+        "question": "How do I access my university email?",
+        "query_index": 15,
+        "session_history_ms": 44.54730002908036,
+        "embedding_ms": 31.69129998423159,
+        "retrieval_wrapper_ms": 1203.565699979663,
+        "retrieval_trace_ms": {
+          "query_processing": 0.5327999824658036,
+          "vector": 63.3444000268355,
+          "bm25": 1.6503999941051006,
+          "rerank": 1136.5754999569617,
+          "search": 1202.829500020016
+        },
+        "retrieval_counts": {
+          "n_bm25": 29,
+          "n_vector": 40,
+          "n_fused": 41,
+          "n_after_rerank": 7,
+          "n_final": 5,
+          "n_images": 3
+        },
+        "hydration_ms": 9.188600000925362,
+        "context_build_ms": 0.1954999752342701,
+        "context_chars": 3630,
+        "llm_generation_ms": 3167.813899985049,
+        "llm_ttft_ms": 2205.326099996455,
+        "answer": "To access your university (Mcampus) email:\n\n1. **Activate your account** – log in to the LMS; this login activates the email account.  \n2. **Use your email address** – it is formatted as `firstname.lastname@mcampus.amref.ac.ke` (e.g., `test.student@mcampus.amref.ac.ke`).  \n3. **Obtain your password** – the password is sent to you via email (individually to each student).  \n4. **Complete two‑step verification** – after entering your email and password, input your phone number to receive a verification code and enter that code.  \n5. **Open the email** – in the LMS, go to **Student Services** and select **Student Email**.\n\nThese steps are based on the official guide for accessing the student email account.  \n\n**Source:** Student Email; Mcampus Email; Cooporate Email; Official Email – https://helpdesk.amref.ac.ke/knowledgebase.php?article=4",
+        "llm_ok": true,
+        "answer_chars": 848,
+        "reasoning_tokens_observed": false,
+        "persist_ms": 758.3030999521725,
+        "total_end_to_end_ms": 5215.398699976504
+      },
+      {
+        "question": "Where do I sign in to corporate Outlook?",
+        "query_index": 16,
+        "session_history_ms": 45.85860000224784,
+        "embedding_ms": 31.91240003798157,
+        "retrieval_wrapper_ms": 1011.7716999957338,
+        "retrieval_trace_ms": {
+          "query_processing": 2.229499979875982,
+          "vector": 82.72539998870343,
+          "bm25": 1.4915000065229833,
+          "rerank": 924.0989999962039,
+          "search": 1009.349400002975
+        },
+        "retrieval_counts": {
+          "n_bm25": 29,
+          "n_vector": 40,
+          "n_fused": 41,
+          "n_after_rerank": 7,
+          "n_final": 5,
+          "n_images": 3
+        },
+        "hydration_ms": 7.571199967060238,
+        "context_build_ms": 0.15630002599209547,
+        "context_chars": 3419,
+        "llm_generation_ms": 20344.584499951452,
+        "llm_ttft_ms": 15079.723999951966,
+        "answer": "To access your corporate Outlook mailbox at Amref, you first log in to the LMS and then open the Student Email link, which launches your corporate Outlook account.  \n\n**Steps (based on the supplied articles)**  \n\n1. Go to the LMS: open Chrome/Mozilla/Firefox/Opera Mini and type **lms.amref.ac.ke** (or search Google for “lms amref”).  \n2. At the top‑right of the LMS homepage, click **Login/Register**.  \n3. In the pop‑up window, click **“Use your Amref email address to sign in.”**  \n4. Enter your Amref email address and password; you will be redirected to the AMREF email login page.  \n5. Once logged into the LMS, locate the **Student Services** menu (left navigation or top bar) and select **Student Email**.  \n6. This opens your corporate Outlook mailbox (email format firstname.lastname@mcampus.amref.ac.ke). If prompted, enter your email and password again, then complete the two‑step verification using your phone number as described in the Student Email article.  \n\n*Alternative direct route*: You can also sign in to Outlook/Microsoft 365 directly by going to the Microsoft 365 sign‑in page and entering your work/school Amref email; after your password you will be prompted for additional verification (Microsoft Authenticator or SMS) as outlined in the MFA setup article.  \n\n**Sources**  \n- Article 2: *Student Email; Mcampus Email; Cooporate Email; Official Email* – https://helpdesk.amref.ac.ke/knowledgebase.php?article=4  \n- Article 3: *Set up your Microsoft 365 sign-in for multi-factor authentication* – https://helpdesk.amref.ac.ke/knowledgebase.php?article=10",
+        "llm_ok": true,
+        "answer_chars": 1581,
+        "reasoning_tokens_observed": false,
+        "persist_ms": 301.1707999976352,
+        "total_end_to_end_ms": 21743.188399996143
+      },
+      {
+        "question": "My laptop cannot connect to the campus Wi-Fi.",
+        "query_index": 17,
+        "session_history_ms": 18.62949994392693,
+        "embedding_ms": 47.841900028288364,
+        "retrieval_wrapper_ms": 789.855599985458,
+        "retrieval_trace_ms": {
+          "query_processing": 3.0135000124573708,
+          "vector": 10.35340002272278,
+          "bm25": 8.89570004073903,
+          "rerank": 766.4546000305563,
+          "search": 786.6682999883778
+        },
+        "retrieval_counts": {
+          "n_bm25": 4,
+          "n_vector": 40,
+          "n_fused": 40,
+          "n_after_rerank": 0,
+          "n_final": 0,
+          "n_images": 3
+        },
+        "hydration_ms": 3.1840999727137387,
+        "context_build_ms": 0.026100024115294218,
+        "context_chars": 166,
+        "llm_generation_ms": 26981.730700004846,
+        "llm_ttft_ms": 26981.527699972503,
+        "answer": "I found relevant knowledge-base material but could not generate an answer: the openai endpoint could not be reached. This is a configuration or service problem, not a gap in the knowledge base — please check the server logs.",
+        "llm_ok": false,
+        "answer_chars": 224,
+        "reasoning_tokens_observed": false,
+        "persist_ms": 33.920500020030886,
+        "total_end_to_end_ms": 27875.224699964747
+      },
+      {
+        "question": "The portal shows an error when I upload a document.",
+        "query_index": 18,
+        "session_history_ms": 24.526000022888184,
+        "embedding_ms": 35.61349998926744,
+        "retrieval_wrapper_ms": 1149.77799996268,
+        "retrieval_trace_ms": {
+          "query_processing": 5.123000009916723,
+          "vector": 57.10380000527948,
+          "bm25": 5.861399986315519,
+          "rerank": 1080.0686999573372,
+          "search": 1144.4198000244796
+        },
+        "retrieval_counts": {
+          "n_bm25": 35,
+          "n_vector": 40,
+          "n_fused": 41,
+          "n_after_rerank": 4,
+          "n_final": 4,
+          "n_images": 3
+        },
+        "hydration_ms": 16.07390004210174,
+        "context_build_ms": 0.11799996718764305,
+        "context_chars": 2445,
+        "llm_generation_ms": 6321.576600021217,
+        "llm_ttft_ms": 2327.439400018193,
+        "answer": "The knowledge‑base articles supplied do not contain a specific troubleshooting procedure for “the portal shows an error when I upload a document.” They cover how to reach the Student Portal (https://students.amref.ac.ke/), how to log in, and how to reset a password, as well as a general user‑guide PDF, but they do not list possible causes or step‑by‑step fixes for document‑upload problems.\n\n**What is documented**\n\n- Access the portal at **https://students.amref.ac.ke/** (Article 1: *Student Portal*).  \n- Log in using your Amref student email and password; if you forget the password, follow the reset steps in Article 3 (*Reset your student portal password*).  \n- Refer to the **Student‑Portal‑User‑Guide.pdf** (Article 2) for general navigation of the portal.\n\n**What is not documented**\n\n- Specific error messages that may appear during a document upload.  \n- File‑type, size, or format requirements for uploads.  \n- Steps to clear browser cache, try a different browser, or check network connectivity related to upload failures.\n\nBecause the context does not provide upload‑error troubleshooting, I cannot give a numbered, verified procedure for that issue. If you need further assistance, please contact the AMREF Help Desk directly.  \n\n**Sources**  \n- Article 1: *Student Portal* – https://helpdesk.amref.ac.ke/knowledgebase.php?article=3  \n- Article 2: *Student portal user guide* – https://helpdesk.amref.ac.ke/knowledgebase.php?article=12  \n- Article 3: *Reset your student portal password* – https://helpdesk.amref.ac.ke/knowledgebase.php?article=9",
+        "llm_ok": true,
+        "answer_chars": 1563,
+        "reasoning_tokens_observed": false,
+        "persist_ms": 53.59239998506382,
+        "total_end_to_end_ms": 7601.440700003877
+      },
+      {
+        "question": "Hi, can you help me contact the Amref Help Desk?",
+        "query_index": 19,
+        "session_history_ms": 350.99950002040714,
+        "embedding_ms": 237.4197999597527,
+        "retrieval_wrapper_ms": 3744.6138000232168,
+        "retrieval_trace_ms": {
+          "query_processing": 4.231599974445999,
+          "vector": 2582.029000041075,
+          "bm25": 26.684400043450296,
+          "rerank": 1128.8714000256732,
+          "search": 3739.9697999935597
+        },
+        "retrieval_counts": {
+          "n_bm25": 14,
+          "n_vector": 40,
+          "n_fused": 40,
+          "n_after_rerank": 8,
+          "n_final": 5,
+          "n_images": 3
+        },
+        "hydration_ms": 2034.2977999825962,
+        "context_build_ms": 0.21490000654011965,
+        "context_chars": 3474,
+        "llm_generation_ms": 23029.552099993452,
+        "llm_ttft_ms": 11563.745599996764,
+        "answer": "You can contact the Amref Help Desk using any of the following methods:\n\n1. **Through the LMS**  \n   - Log in to the LMS.  \n   - Hover over the **Student Services** menu.  \n   - Click the **Help Desk** link (see the screenshot in the article).  \n\n2. **Via the Help Desk website**  \n   - Open your browser and go to **http://helpdesk.amref.ac.ke**.  \n\n3. **By email**  \n   - Send a message to **helpdesk@amref.ac.ke** – a ticket will be created automatically.  \n\n4. **Through the Student Portal**  \n   - Access the Student Portal and locate the Help Desk option (as described in the article).  \n\nOnce you reach the Help Desk interface:  \n5. Click the **“Submit a ticket”** button.  \n6. Select the appropriate **category** for your issue.  \n7. Fill in the required fields (name, email, admissions/registration number, priority, subject, message, and any attachments).  \n8. Click the **“Submit Ticket”** button.  \n\nYou will receive an email confirmation and further notifications whenever the ticket is updated.  \n\n*Source: How to access the AmIU help desk – https://helpdesk.amref.ac.ke/knowledgebase.php?article=2*",
+        "llm_ok": true,
+        "answer_chars": 1113,
+        "reasoning_tokens_observed": false,
+        "persist_ms": 2372.625300020445,
+        "total_end_to_end_ms": 31769.83919995837
+      },
+      {
+        "question": "Please help me log in.",
+        "query_index": 20,
+        "session_history_ms": 40.76810000697151,
+        "embedding_ms": 31.590400030836463,
+        "retrieval_wrapper_ms": 888.3819000329822,
+        "retrieval_trace_ms": {
+          "query_processing": 0.9483000030741096,
+          "vector": 64.56699996488169,
+          "bm25": 1.7182999872602522,
+          "rerank": 819.5614999858662,
+          "search": 887.0446999790147
+        },
+        "retrieval_counts": {
+          "n_bm25": 21,
+          "n_vector": 40,
+          "n_fused": 41,
+          "n_after_rerank": 4,
+          "n_final": 4,
+          "n_images": 3
+        },
+        "hydration_ms": 9.728700038976967,
+        "context_build_ms": 0.21389999892562628,
+        "context_chars": 3115,
+        "llm_generation_ms": 6186.710100038908,
+        "llm_ttft_ms": 4493.214700021781,
+        "answer": "To log in to the Amref Learning Management System (LMS), follow these steps:\n\n1. Open your browser (Chrome, Mozilla, Firefox, Internet Explorer, or Opera Mini) and go to **lms.amref.ac.ke** or search Google for “lms amref”.  \n2. On the LMS homepage, click **‘Login/Register’** at the top‑right corner.  \n3. In the pop‑up window, select the button **“Use your Amref email address to sign in.”**  \n4. You will be redirected to the AMREF email login page – enter your Amref email address and password, then sign in.  \n5. After logging in, navigate the left‑hand menu to **My courses** and choose the course you wish to access.\n\nIf you need to reset your student‑portal password instead, see the “Reset your student portal password” article for the required password rules (minimum 10 characters, mix of upper/lowercase, numbers, special characters, not your official name) and the reset process.\n\n**Sources**  \n- How to login to LMS: https://helpdesk.amref.ac.ke/knowledgebase.php?article=1  \n- Reset your student portal password: https://helpdesk.amref.ac.ke/knowledgebase.php?article=9",
+        "llm_ok": true,
+        "answer_chars": 1084,
+        "reasoning_tokens_observed": false,
+        "persist_ms": 799.063699960243,
+        "total_end_to_end_ms": 7956.611400004476
+      }
+    ],
+    "aggregate": {
+      "session_history_ms": {
+        "n": 20,
+        "mean": 190.5073599977186,
+        "median": 45.2029500156641,
+        "p95": 525.3673200291827,
+        "min": 18.62949994392693,
+        "max": 2215.9686999511905
+      },
+      "embedding_ms": {
+        "n": 20,
+        "mean": 65.11772999947425,
+        "median": 46.05894998530857,
+        "p95": 134.78588502621287,
+        "min": 31.590400030836463,
+        "max": 237.4197999597527
+      },
+      "retrieval_wrapper_ms": {
+        "n": 20,
+        "mean": 1593.4989649947966,
+        "median": 1160.3357999701984,
+        "p95": 3796.3656450243443,
+        "min": 789.855599985458,
+        "max": 4779.6507000457495
+      },
+      "hydration_ms": {
+        "n": 20,
+        "mean": 114.3043200019747,
+        "median": 10.453350027091801,
+        "p95": 163.33359999698726,
+        "min": 3.1840999727137387,
+        "max": 2034.2977999825962
+      },
+      "context_build_ms": {
+        "n": 20,
+        "mean": 0.16840000462252647,
+        "median": 0.14925000141374767,
+        "p95": 0.26829003181774175,
+        "min": 0.026100024115294218,
+        "max": 0.3402999718673527
+      },
+      "llm_generation_ms": {
+        "n": 20,
+        "mean": 14441.421689995332,
+        "median": 11345.69434999139,
+        "p95": 27147.772955003897,
+        "min": 3167.813899985049,
+        "max": 30302.57579998579
+      },
+      "persist_ms": {
+        "n": 20,
+        "mean": 742.7548349893186,
+        "median": 214.95574997970834,
+        "p95": 2295.9514650166966,
+        "min": 33.920500020030886,
+        "max": 2372.625300020445
+      },
+      "total_end_to_end_ms": {
+        "n": 20,
+        "mean": 17147.902019997127,
+        "median": 14024.172050034394,
+        "p95": 31838.818099960918,
+        "min": 5215.398699976504,
+        "max": 33149.41720000934
+      },
+      "retrieval_trace": {
+        "bm25": {
+          "n": 20,
+          "mean": 4.6107000060146675,
+          "median": 1.9910999690182507,
+          "p95": 9.785135040874605,
+          "min": 0.7847000379115343,
+          "max": 26.684400043450296
+        },
+        "query_processing": {
+          "n": 20,
+          "mean": 134.3678449979052,
+          "median": 2.9885999974794686,
+          "p95": 136.64613500877937,
+          "min": 0.5327999824658036,
+          "max": 2635.585699987132
+        },
+        "rerank": {
+          "n": 20,
+          "mean": 985.3906000003917,
+          "median": 902.9251000029035,
+          "p95": 1769.6069499856094,
+          "min": 640.7784000039101,
+          "max": 1796.49859998608
+        },
+        "search": {
+          "n": 20,
+          "mean": 1458.7933750008233,
+          "median": 1154.9381999939214,
+          "p95": 3727.289864991326,
+          "min": 786.6682999883778,
+          "max": 3739.9697999935597
+        },
+        "vector": {
+          "n": 20,
+          "mean": 331.52935500838794,
+          "median": 101.44949998357333,
+          "p95": 996.8745800171757,
+          "min": 10.35340002272278,
+          "max": 2582.029000041075
+        }
+      },
+      "llm_success_rate": 0.95,
+      "latency_share_percent_median": {
+        "session_history_ms": 0.32232170180451575,
+        "embedding_ms": 0.3284254487251218,
+        "retrieval_wrapper_ms": 8.273827473240052,
+        "hydration_ms": 0.07453809030434823,
+        "context_build_ms": 0.0010642339589193904,
+        "llm_generation_ms": 80.90099229753505,
+        "persist_ms": 1.5327518031924114,
+        "bm25": 0.01419762936389081,
+        "query_processing": 0.0213103489233943,
+        "rerank": 6.438348708084261,
+        "search": 8.235339639826288,
+        "vector": 0.7233902979914206
+      }
+    }
+  }
+}

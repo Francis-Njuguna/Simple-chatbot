@@ -11,15 +11,15 @@ Production-ready Retrieval-Augmented Generation (RAG) chatbot for **Amref Intern
 - Source citations with article title, URL, and confidence scores
 - Conversation memory with PostgreSQL session history
 - JWT authentication, rate limiting, feedback system, analytics logging
-- Configurable LLM: OpenAI-compatible provider (Qwen / GPT-4o) or local Ollama models
-- Streamlit chat UI with dark mode, categories filter, and search history
+- NVIDIA NIM (`nvidia/nemotron-3-super-120b-a12b`) through its OpenAI-compatible API
+- Standalone embeddable chat widget
 - Docker Compose deployment
 
 ## Architecture
 
 ```
 ┌─────────────────┐     ┌──────────────────┐     ┌─────────────┐
-│  Streamlit UI   │────▶│  FastAPI Backend │────▶│ PostgreSQL  │
+│  Chat Widget    │────▶│  FastAPI Backend │────▶│ PostgreSQL  │
 │  (frontend/)    │     │  (backend/app/)  │     │ (metadata)  │
 └─────────────────┘     └────────┬─────────┘     └─────────────┘
                                  │
@@ -51,12 +51,12 @@ backend/app/
 | Component | Technology |
 |-----------|------------|
 | Backend | FastAPI (async) |
-| Frontend | Streamlit |
+| Frontend | Static HTML/CSS/JavaScript widget served by Nginx |
 | Database | PostgreSQL |
 | Vector DB | ChromaDB |
 | LLM Framework | LangChain |
 | Embeddings | sentence-transformers/all-MiniLM-L6-v2 |
-| LLM | OpenAI GPT-4o / Ollama |
+| LLM | NVIDIA NIM (`nvidia/nemotron-3-super-120b-a12b`) |
 | Package Manager | uv |
 
 ## Prerequisites
@@ -64,7 +64,7 @@ backend/app/
 - Python 3.11+
 - [uv](https://docs.astral.sh/uv/) package manager
 - PostgreSQL 16+ (or use Docker Compose)
-- OpenAI-compatible API key (Qwen/OpenAI) or Ollama for local inference
+- NVIDIA NIM API key (OpenAI-compatible endpoint)
 
 ## Setup
 
@@ -75,7 +75,7 @@ cd amref-helpdesk-rag
 cp .env.example .env
 ```
 
-If you are using a local Ollama-backed Qwen model, set the following in `.env` instead of the OpenAI-compatible provider fields:
+Production uses NVIDIA NIM. Keep `LLM_PROVIDER=openai`, set the NVIDIA endpoint and model, and store the API key only in deployment secrets. Local Ollama/Qwen remains a development-only alternative:
 
 ```bash
 LLM_PROVIDER=ollama
@@ -149,12 +149,13 @@ Re-run ingestion to index local images.
 ```bash
 # Backend
 uv run uvicorn backend.app.main:app --reload --host 0.0.0.0 --port 8000
-# Frontend
-uv run streamlit run frontend/streamlit_app.py --server.port 8501
+# Widget (local static server)
+cd frontend/widget
+python -m http.server 8501
 ```
 
 - API docs: http://localhost:8000/docs
-- Chat UI: http://localhost:8501
+- Widget test page: http://localhost:8501/index.html
 
 ### Docker Compose (full stack)
 
@@ -164,7 +165,7 @@ docker compose up --build
 
 Services:
 - Backend: http://localhost:8000
-- Streamlit: http://localhost:8501
+- Widget: http://localhost:8501
 - PostgreSQL: localhost:5432
 
 ## API Endpoints
@@ -212,10 +213,10 @@ Key environment variables (see `.env.example`):
 
 | Variable | Description | Default |
 |----------|-------------|---------|
-| `LLM_PROVIDER` | `openai` or `ollama` | `openai` |
-| `OPENAI_MODEL` | OpenAI or Qwen model name | `gpt-4o` |
-| `OPENAI_API_BASE` | Base URL for OpenAI-compatible / Qwen endpoints | `https://<qwen-openai-compatible-endpoint>` |
-| `OPENAI_API_KEY` | Optional API key for local OpenAI-compatible endpoints | `` |
+| `LLM_PROVIDER` | NVIDIA's OpenAI-compatible provider (`openai`) | `openai` |
+| `OPENAI_MODEL` | NVIDIA NIM model name | `nvidia/nemotron-3-super-120b-a12b` |
+| `OPENAI_API_BASE` | NVIDIA NIM OpenAI-compatible base URL | `https://integrate.api.nvidia.com/v1` |
+| `OPENAI_API_KEY` | NVIDIA API key, supplied via deployment secret | required |
 | `OLLAMA_BASE_URL` | Local Ollama server URL | `http://localhost:11434` |
 | `OLLAMA_MODEL` | Ollama model name | `qwen3:4b` |
 | `EMBEDDING_MODEL` | Sentence transformer model | `all-MiniLM-L6-v2` |
@@ -223,7 +224,11 @@ Key environment variables (see `.env.example`):
 | `TOP_K_RETRIEVAL` | Text chunks retrieved | `5` |
 | `TOP_K_IMAGES` | Max images returned | `3` |
 
-### Local Qwen / OpenAI-compatible Ollama
+### Request Budget
+
+Chat endpoints are limited to `5/minute` per client IP. This matches the expected workload of roughly 100 requests per day while allowing short bursts. The LLM concurrency gate remains at one in production because the NVIDIA benchmark showed sharply reduced success rates above low concurrency.
+
+### Local Qwen / OpenAI-compatible Ollama (development only)
 
 For local Qwen running on an Ollama server, keep `LLM_PROVIDER=openai`, set `OPENAI_API_BASE=http://localhost:11434`, and choose the local model name in `OPENAI_MODEL` (for example `qwen3:4b`). `OPENAI_API_KEY` can remain blank if the local server does not require authentication.
 

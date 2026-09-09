@@ -6,10 +6,28 @@ candidates out of thousands, but weak at fine-grained ordering. A cross-encoder
 reads the query and chunk **together** in one forward pass and scores their
 actual relevance, which reorders a shortlist far more accurately.
 
-It is ~10-40ms per pair on CPU, so it runs on the MMR shortlist only (a dozen
-chunks), never the full corpus. Model load is lazy and failure is non-fatal:
-if the weights cannot be fetched the retriever keeps the cosine ordering rather
-than erroring out on every query.
+It runs on the fused shortlist only (a handful of chunks), never the full corpus.
+Cost per pair is hardware-dependent. Measured *warm* on a 4-core CPU box with no
+GPU, int8: 18-26ms per pair. So RERANK_SHORTLIST x RERANK_QUERY_FORMS is the
+dominant term in retrieval latency, but a modest one — the shipped 8 x 2 = 16
+pairs is ~0.4s.
+
+Two numbers to distrust if you find them quoted elsewhere in this repo:
+
+* "123-166ms per pair" was briefly written here and in config.py. It is wrong:
+  it came from cold first calls that also paid graph setup. Discard the first
+  few predict() calls before timing this model, or you will measure that again.
+* "~271ms per pair", derived from production's 8.7s for 32 pairs. Also wrong,
+  and more misleading than the first: that request was slow because the whole
+  process was starved, not because a pair costs 271ms. In the same log, a stage
+  that does nothing but concatenate strings took 1,848ms, one Postgres SELECT
+  took 14,953ms, and the same warm model embedded one short query in 95ms and in
+  4,452ms a minute apart. Rerank absorbs the blame because it is the largest
+  block of CPU work in the request, not because it is the problem. Do NOT shrink
+  the shortlist or swap in a smaller model to chase it. See RERANK_LATENCY.md.
+
+Model load is lazy and failure is non-fatal: if the weights cannot be fetched the
+retriever keeps the cosine ordering rather than erroring out on every query.
 """
 
 import threading
@@ -20,6 +38,13 @@ from backend.app.config import get_settings
 from backend.app.utils.logging import get_logger
 
 logger = get_logger(__name__)
+
+# Upper bound on pairs sent to one predict() call. The point of batching is to
+# let RERANK_SHORTLIST x RERANK_QUERY_FORMS land in a single forward pass, which
+# at the shipped 8 x 2 is 16 — well under this. The cap only exists so that
+# raising those settings degrades into several sensible batches instead of one
+# enormous allocation. Chunks are ~500 chars (~130 tokens), so 64 pairs is small.
+_MAX_BATCH_PAIRS = 64
 
 
 class CrossEncoderReranker:
@@ -144,11 +169,74 @@ class CrossEncoderReranker:
         if model is None:
             return None
         try:
-            scores = model.predict([(query, passage) for passage in passages])
+            scores = model.predict(
+                [(query, passage) for passage in passages],
+                show_progress_bar=False,
+            )
             return [float(s) for s in scores]
         except Exception as exc:  # noqa: BLE001
             logger.warning("Cross-encoder scoring failed (%s) — keeping prior order", exc)
             return None
+
+    def score_multi(
+        self, queries: list[str], passages: list[str]
+    ) -> Optional[list[float]]:
+        """Best score per passage across several query phrasings, in ONE batch.
+
+        Returns the same numbers as calling :meth:`score` once per query and
+        max-pooling elementwise — identical pairs, identical model, identical
+        arithmetic. What changes is scheduling, and on this hardware scheduling is
+        worth real time:
+
+        * One ``predict`` call instead of N means one batching pass. With
+          shortlist 8 x 2 forms = 16 pairs and predict's default batch_size of
+          32, the whole grid is a single forward batch where it used to be two.
+        * ``predict`` length-sorts its input to minimise padding
+          (``CrossEncoder.predict``, and it un-sorts the results afterwards so
+          input order is preserved — which is what makes the reshape below
+          correct). Sorting all pairs *together* pads better than sorting each
+          form's batch separately.
+
+        Falls back to None on any failure, exactly like :meth:`score`, so the
+        caller keeps its prior ordering rather than erroring out.
+        """
+        if not self.settings.rerank_enabled or not passages or not queries:
+            return None
+        model = self._ensure_model()
+        if model is None:
+            return None
+
+        # Row-major: all passages for queries[0], then all for queries[1], ...
+        pairs = [(q, p) for q in queries for p in passages]
+        try:
+            # show_progress_bar defaults to None, which sentence-transformers
+            # resolves to True whenever its logger sits at INFO — that is a tqdm
+            # bar on stderr for every query in production. Always off here.
+            flat = model.predict(
+                pairs,
+                batch_size=min(len(pairs), _MAX_BATCH_PAIRS),
+                show_progress_bar=False,
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("Cross-encoder scoring failed (%s) — keeping prior order", exc)
+            return None
+
+        if len(flat) != len(pairs):  # defensive: never seen, but the reshape assumes it
+            logger.warning(
+                "Cross-encoder returned %d scores for %d pairs — keeping prior order",
+                len(flat),
+                len(pairs),
+            )
+            return None
+
+        width = len(passages)
+        best = [float(s) for s in flat[:width]]
+        for offset in range(width, len(pairs), width):
+            for i in range(width):
+                value = float(flat[offset + i])
+                if value > best[i]:
+                    best[i] = value
+        return best
 
     def warmup(self) -> None:
         """Pre-load the model so the first real query doesn't pay for it."""

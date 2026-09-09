@@ -4,7 +4,7 @@
 # Stages
 #   base      : slim Python image + OS deps shared by both services
 #   backend   : installs backend Python deps + copies backend/scripts/data
-#   frontend  : installs ONLY streamlit + httpx, copies frontend/
+#   widget    : served by the standalone Dockerfile.widget image
 #
 # Railway notes
 #   - Railway injects $PORT at runtime; CMD uses a shell form so the variable
@@ -42,10 +42,15 @@ FROM base AS backend
 
 # Install backend Python deps first (layer-cached unless requirements change)
 COPY requirements-backend.txt ./
-RUN pip install --no-cache-dir -r requirements-backend.txt
+# Install the CPU-only torch wheel before sentence-transformers so a CPU Railway
+# service does not resolve hundreds of megabytes of CUDA runtime packages.
+RUN pip install --no-cache-dir --index-url https://download.pytorch.org/whl/cpu "torch>=2.2" \
+    && pip install --no-cache-dir -r requirements-backend.txt --extra-index-url https://download.pytorch.org/whl/cpu
 
 # Copy source
 COPY pyproject.toml README.md ./
+COPY alembic.ini ./
+COPY alembic ./alembic
 COPY backend ./backend
 COPY scripts ./scripts
 COPY data    ./data
@@ -53,7 +58,10 @@ COPY data    ./data
 # Install the backend package in editable mode so that
 # `import backend` works from any working directory (fixes
 # ModuleNotFoundError: No module named 'backend' in scripts/)
-RUN pip install --no-cache-dir -e .
+# Backend dependencies were installed from requirements-backend.txt above.
+# Avoid pulling frontend-only project dependencies into
+# this image when registering the local package.
+RUN pip install --no-cache-dir --no-deps -e .
 
 RUN mkdir -p logs data/chroma backend/app/static/images
 
@@ -62,27 +70,3 @@ EXPOSE 8000
 # Shell form so Railway's $PORT variable is expanded at runtime.
 CMD uvicorn backend.app.main:app --host 0.0.0.0 --port ${PORT:-8000}
 
-# -----------------------------------------------------------------------------
-# frontend — only streamlit + httpx (tiny image, fast build)
-# -----------------------------------------------------------------------------
-FROM base AS frontend
-
-# Install ONLY what the Streamlit app needs
-COPY requirements-frontend.txt ./
-RUN pip install --no-cache-dir -r requirements-frontend.txt
-
-COPY frontend ./frontend
-
-# Embeddable chat widget — Streamlit serves files from the `static/` folder
-# next to the app script at /app/static/<file> when static serving is enabled.
-# Deployed URL: https://<frontend-domain>/app/static/chat-widget.js
-RUN cp -r frontend/widget frontend/static
-
-EXPOSE 8501
-
-# Shell form so Railway's $PORT variable is expanded at runtime.
-CMD streamlit run frontend/streamlit_app.py \
-    --server.port ${PORT:-8501} \
-    --server.address 0.0.0.0 \
-    --server.headless true \
-    --server.enableStaticServing true

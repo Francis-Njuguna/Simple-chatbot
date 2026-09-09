@@ -10,6 +10,7 @@ Performance notes
 """
 
 
+import asyncio
 import time
 from functools import lru_cache
 from typing import Any
@@ -17,10 +18,20 @@ from typing import Any
 from langchain_core.messages import HumanMessage, SystemMessage
 
 from backend.app.config import get_settings
-from backend.app.prompts.templates import NO_IMAGES_NOTE, SYSTEM_PROMPT, USER_PROMPT_TEMPLATE
+from backend.app.prompts.templates import (
+    COMPACT_SYSTEM_PROMPT,
+    COMPACT_USER_PROMPT_TEMPLATE,
+    NO_IMAGES_NOTE,
+    SYSTEM_PROMPT,
+    USER_PROMPT_TEMPLATE,
+)
 from backend.app.utils.logging import get_logger
 
 logger = get_logger(__name__)
+
+
+class LLMQueueBusyError(TimeoutError):
+    """Raised when the bounded outbound-generation queue is full."""
 
 
 class LLMService:
@@ -37,6 +48,30 @@ class LLMService:
     def __init__(self) -> None:
         self.settings = get_settings()
         self._llm = self._build_llm()
+        self._generation_gate: asyncio.Semaphore | None = None
+
+    def _ensure_generation_gate(self) -> asyncio.Semaphore:
+        gate = getattr(self, "_generation_gate", None)
+        if gate is None:
+            gate = asyncio.Semaphore(max(1, int(self.settings.llm_max_concurrency)))
+            self._generation_gate = gate
+        return gate
+
+    async def _acquire_generation_slot(self) -> asyncio.Semaphore:
+        gate = self._ensure_generation_gate()
+        timeout = float(getattr(self.settings, "llm_queue_timeout", 0.0) or 0.0)
+        try:
+            if timeout > 0:
+                await asyncio.wait_for(gate.acquire(), timeout=timeout)
+            else:
+                await gate.acquire()
+        except TimeoutError as exc:
+            raise LLMQueueBusyError from exc
+        return gate
+
+    @staticmethod
+    def _queue_busy_message() -> str:
+        return "The help desk is handling other requests right now. Please try again in a moment."
 
     def _build_llm(self) -> Any:
         provider = self.settings.llm_provider
@@ -78,18 +113,44 @@ class LLMService:
             # AgentRouter emits `data: null` SSE frames that crash the langchain
             # streaming adapter. See rag.sse_repair for the frame dump and why
             # the repair belongs at the transport layer.
+            import httpx  # lazy: only this provider builds its own client
+
             from backend.app.rag.sse_repair import build_repaired_async_client
 
+            # Granular, not scalar — see settings.llm_connect_timeout for why
+            # connect and read need different budgets.
+            #
+            # This object MUST also be handed to ChatOpenAI below. langchain
+            # passes `request_timeout` straight through to AsyncOpenAI, and the
+            # SDK only falls back to the http client's own timeout when it was
+            # given none at all (`if not is_given(timeout)`,
+            # openai/_base_client.py:1491). So passing a bare int there would
+            # silently discard this split and restore one flat budget.
+            timeout = httpx.Timeout(
+                connect=self.settings.llm_connect_timeout,
+                read=float(self.settings.llm_timeout),
+                write=float(self.settings.llm_timeout),
+                pool=self.settings.llm_connect_timeout,
+            )
+
             kwargs["http_async_client"] = build_repaired_async_client(
-                timeout=self.settings.llm_timeout,
+                timeout=timeout,
                 max_connections=self.settings.llm_max_connections,
                 max_keepalive=self.settings.llm_max_keepalive_connections,
             )
 
             logger.info(
-                "Using AgentRouter model %s via %s",
+                "Using AgentRouter model %s via %s (connect %.0fs, read %.0fs x %d "
+                "attempts = %.0fs worst case, first-token ceiling %s)",
                 self.settings.agentrouter_model,
                 base_url,
+                self.settings.llm_connect_timeout,
+                float(self.settings.llm_timeout),
+                1 + max(0, self.settings.llm_max_retries),
+                self.settings.llm_transport_worst_case_seconds,
+                f"{self.settings.llm_first_token_timeout:.0f}s"
+                if self.settings.llm_first_token_timeout > 0
+                else "disabled",
             )
             return ChatOpenAI(
                 model=self.settings.agentrouter_model,
@@ -98,8 +159,12 @@ class LLMService:
                 # None => the parameter is not sent at all. See config.
                 temperature=self.settings.agentrouter_temperature,
                 max_tokens=max_tokens,
-                timeout=self.settings.llm_timeout,
+                timeout=timeout,
                 max_retries=self.settings.llm_max_retries,
+                # langchain_openai's own default is 120s, which would leave a
+                # half-written answer on screen for two minutes. See
+                # settings.llm_stream_stall_timeout.
+                stream_chunk_timeout=self.settings.llm_stream_stall_timeout or None,
                 **kwargs,
             )
 
@@ -198,6 +263,11 @@ class LLMService:
                 )
             os.environ.setdefault("OPENAI_API_BASE", self.settings.openai_api_base)
             logger.info("OpenAI API base overridden: %s", self.settings.openai_api_base)
+            is_nvidia = "integrate.api.nvidia.com" in self.settings.openai_api_base
+            if is_nvidia and not openai_api_key:
+                raise RuntimeError(
+                    "OPENAI_API_KEY / NVIDIA_API_KEY is required for NVIDIA NIM."
+                )
             if not openai_api_key:
                 logger.warning(
                     "OPENAI_API_KEY is not set. Using local OpenAI-compatible endpoint without authentication. "
@@ -234,20 +304,27 @@ class LLMService:
     def _build_messages(
         self, question: str, context: str, history: str, images: str
     ) -> list[Any]:
-        user_prompt = USER_PROMPT_TEMPLATE.format(
+        system_prompt, user_template = self._prompt_templates()
+        user_prompt = user_template.format(
             context=context,
             images=images,
             history=history,
             question=question,
         )
         return [
-            SystemMessage(content=SYSTEM_PROMPT),
+            SystemMessage(content=system_prompt),
             HumanMessage(content=user_prompt),
         ]
 
+    def _prompt_templates(self) -> tuple[str, str]:
+        if getattr(self.settings, "llm_prompt_profile", "legacy") == "compact":
+            return COMPACT_SYSTEM_PROMPT, COMPACT_USER_PROMPT_TEMPLATE
+        return SYSTEM_PROMPT, USER_PROMPT_TEMPLATE
+
     def _build_prompt(self, question: str, context: str, history: str, images: str) -> str:
+        system_prompt, user_template = self._prompt_templates()
         return "\n\n".join(
-            [SYSTEM_PROMPT, USER_PROMPT_TEMPLATE.format(
+            [system_prompt, user_template.format(
                 context=context,
                 images=images,
                 history=history,
@@ -294,6 +371,25 @@ class LLMService:
             # why the non-streaming path keeps the space.
             return _clean(("" if not strip else " ").join(parts))
         return _clean(str(content))
+
+    @staticmethod
+    def _extract_reasoning_chars(chunk: Any) -> int:
+        """Count provider reasoning deltas for diagnostics without exposing them."""
+        total = 0
+        for attr in ("additional_kwargs", "response_metadata"):
+            value = getattr(chunk, attr, None) or {}
+            if isinstance(value, dict):
+                for key in ("reasoning_content", "reasoning"):
+                    raw = value.get(key)
+                    if isinstance(raw, str):
+                        total += len(raw)
+        content = getattr(chunk, "content", None)
+        if isinstance(content, list):
+            for block in content:
+                if isinstance(block, dict) and block.get("type") in {"reasoning", "thinking"}:
+                    raw = block.get("text") or block.get("content") or ""
+                    total += len(raw) if isinstance(raw, str) else 0
+        return total
  
     def _error_message(self, exc: Exception) -> str:
         """Return a user-facing message describing an LLM *failure*.
@@ -306,8 +402,21 @@ class LLMService:
         """
         provider = self.settings.llm_provider
         name = type(exc).__name__
+        status = getattr(exc, "status_code", None)
 
-        if "Authentication" in name or "PermissionDenied" in name:
+        if name == "PermissionDeniedError" or status == 403:
+            # 403 is NOT a credentials problem, and saying it is sends you to
+            # rotate a key that was fine. AgentRouter returns 403
+            # "该令牌无权访问模型 <model>" ("this token is not authorised for model
+            # <model>") when the key is valid but the plan does not include that
+            # model. Measured 2026-08-18: this key answers on claude-opus-5 and
+            # returns 403 for both claude-haiku-4-5 and claude-sonnet-4-5.
+            detail = (
+                f"the {provider} plan for this key does not include the model "
+                f"{self._configured_model()} (HTTP 403). The key itself is "
+                "valid — switch the model back, or upgrade the key"
+            )
+        elif "Authentication" in name or "PermissionDenied" in name:
             detail = (
                 f"the {provider} endpoint rejected the configured credentials"
             )
@@ -427,21 +536,41 @@ class LLMService:
                 else len(prompt)
             )
 
-        started = time.perf_counter()
+        queued_at = time.perf_counter()
+        provider_started: float | None = None
+        gate: asyncio.Semaphore | None = None
         try:
+            gate = await self._acquire_generation_slot()
+            provider_started = time.perf_counter()
+            if stats is not None:
+                stats["llm_queue_ms"] = (provider_started - queued_at) * 1000.0
             response = await self._llm.ainvoke(prompt)
             if stats is not None:
-                stats["llm_call_ms"] = (time.perf_counter() - started) * 1000.0
+                stats["llm_call_ms"] = (time.perf_counter() - provider_started) * 1000.0
                 stats.update(self._usage(response))
                 stats["ok"] = True
             return self._extract_text(response)
+        except LLMQueueBusyError as exc:
+            if stats is not None:
+                stats["llm_queue_ms"] = (time.perf_counter() - queued_at) * 1000.0
+                stats["llm_call_ms"] = 0.0
+                stats["ok"] = False
+                stats["error"] = type(exc).__name__
+            return self._queue_busy_message()
         except Exception as exc:
             if stats is not None:
-                stats["llm_call_ms"] = (time.perf_counter() - started) * 1000.0
+                stats["llm_call_ms"] = (
+                    (time.perf_counter() - provider_started) * 1000.0
+                    if provider_started is not None
+                    else 0.0
+                )
                 stats["ok"] = False
                 stats["error"] = type(exc).__name__
             logger.exception("LLM generation failed")
             return self._error_message(exc)
+        finally:
+            if gate is not None:
+                gate.release()
 
     async def complete(self, system: str, user: str) -> str:
         """Run a one-off prompt with no chat scaffolding.
@@ -454,8 +583,12 @@ class LLMService:
             prompt: Any = [SystemMessage(content=system), HumanMessage(content=user)]
         else:
             prompt = f"{system}\n\n{user}"
-        response = await self._llm.ainvoke(prompt)
-        return self._extract_text(response)
+        gate = await self._acquire_generation_slot()
+        try:
+            response = await self._llm.ainvoke(prompt)
+            return self._extract_text(response)
+        finally:
+            gate.release()
 
     async def stream_answer(
         self,
@@ -463,23 +596,140 @@ class LLMService:
         context: str,
         history: str = "No prior conversation.",
         images: str = NO_IMAGES_NOTE,
+        stats: dict[str, Any] | None = None,
     ):
-        """Yield answer chunks as they arrive (for streaming responses)."""
+        """Yield answer chunks as they arrive (for streaming responses).
+
+        Time-to-first-token is bounded here by
+        ``settings.llm_first_token_timeout`` rather than being left to the HTTP
+        timeout, because the two are not equivalent: the OpenAI SDK runs its
+        entire retry loop inside the first ``__anext__``, so the transport
+        budget multiplies by the attempt count (30s x 3 = the ~91s measured on
+        2026-08-12) while this deadline does not. It therefore cuts a cascade
+        short wherever it has reached.
+
+        Once real text has been yielded the deadline is dropped. An answer
+        already appearing on screen must not be truncated for being long, and
+        silence *after* the first token is a different failure — caught by
+        ``stream_chunk_timeout`` (settings.llm_stream_stall_timeout) instead.
+        """
         if self._use_chat_model():
             prompt = self._build_messages(question, context, history, images)
         else:
             prompt = self._build_prompt(question, context, history, images)
- 
+
+        budget = float(self.settings.llm_first_token_timeout or 0.0)
+        started = time.perf_counter()
+        if stats is not None:
+            stats["prompt_chars"] = (
+                sum(len(str(m.content)) for m in prompt)
+                if isinstance(prompt, list)
+                else len(prompt)
+            )
+        # One deadline for the whole pre-first-token phase, not a per-chunk
+        # timeout: a reasoning model streams many content-free deltas before any
+        # answer text, and re-arming the clock on each of those would let the
+        # total wait grow without limit while every individual wait looked fine.
+        deadline = None
+        yielded_any = False
+
+        gate: asyncio.Semaphore | None = None
+        iterator = None
         try:
-            async for chunk in self._llm.astream(prompt):
+            gate = await self._acquire_generation_slot()
+            deadline = (time.monotonic() + budget) if budget > 0 else None
+            iterator = self._llm.astream(prompt).__aiter__()
+            while True:
+                try:
+                    if deadline is None:
+                        chunk = await iterator.__anext__()
+                    else:
+                        remaining = deadline - time.monotonic()
+                        if remaining <= 0:
+                            raise TimeoutError
+                        chunk = await asyncio.wait_for(
+                            iterator.__anext__(), timeout=remaining
+                        )
+                except StopAsyncIteration:
+                    break
                 # strip=False: leading/trailing spaces inside a delta are part
                 # of the answer. See _extract_text.
                 text = self._extract_text(chunk, strip=False)
+                if stats is not None:
+                    usage = self._usage(chunk)
+                    if usage:
+                        stats.update(usage)
+                    stats["reasoning_chars"] = stats.get("reasoning_chars", 0) + self._extract_reasoning_chars(chunk)
                 if text:
+                    # Only real text stops the clock — see the note above on
+                    # content-free deltas.
+                    deadline = None
+                    yielded_any = True
+                    if stats is not None and "ttft_ms" not in stats:
+                        stats["ttft_ms"] = (time.perf_counter() - started) * 1000.0
+                    if stats is not None:
+                        stats["answer_chars"] = stats.get("answer_chars", 0) + len(text)
                     yield text
+            if stats is not None:
+                stats["llm_generation_ms"] = (time.perf_counter() - started) * 1000.0
+                stats["ok"] = yielded_any
+        except LLMQueueBusyError:
+            if stats is not None:
+                stats["ok"] = False
+                stats["error"] = "LLMQueueBusyError"
+            yield self._queue_busy_message()
+        except TimeoutError:
+            if stats is not None:
+                stats["ok"] = False
+                stats["error"] = "TimeoutError"
+            # asyncio.TimeoutError is an alias of the builtin from 3.11, and
+            # langchain's StreamChunkTimeoutError subclasses it — so this branch
+            # catches both of our deadlines and has to say which one fired.
+            if yielded_any:
+                logger.error(
+                    "LLM stream stalled mid-answer (provider=%s model=%s, "
+                    "stall budget %.0fs) — answer is incomplete",
+                    self.settings.llm_provider,
+                    self._configured_model(),
+                    self.settings.llm_stream_stall_timeout,
+                )
+                yield (
+                    "\n\n*[The answer was cut off: the model stopped sending "
+                    "text. Please ask again.]*"
+                )
+            else:
+                logger.error(
+                    "LLM sent no answer text within %.0fs (provider=%s model=%s); "
+                    "transport budget was %.0fs x %d attempts = %.0fs",
+                    budget,
+                    self.settings.llm_provider,
+                    self._configured_model(),
+                    float(self.settings.llm_timeout),
+                    1 + max(0, self.settings.llm_max_retries),
+                    self.settings.llm_transport_worst_case_seconds,
+                )
+                yield (
+                    "I found relevant knowledge-base material but the "
+                    f"{self.settings.llm_provider} endpoint did not start "
+                    f"answering within {budget:.0f} seconds, so I stopped "
+                    "waiting. This is a service problem, not a gap in the "
+                    "knowledge base — please try again."
+                )
         except Exception as exc:
+            if stats is not None:
+                stats["ok"] = False
+                stats["error"] = type(exc).__name__
             logger.exception("LLM streaming failed")
             yield self._error_message(exc)
+        finally:
+            # Release the httpx connection now rather than at GC. Matters most
+            # on the timeout path, where the request is still open.
+            try:
+                if iterator is not None:
+                    await iterator.aclose()
+            finally:
+                if gate is not None:
+                    gate.release()
 
 
 # ---------------------------------------------------------------------------
